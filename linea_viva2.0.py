@@ -890,18 +890,17 @@ def vista_dashboard(df, locations):
         for nombre, val, color in filas:
             pct = int(val / max_x * 100)
             rows_html += (
-                f"<div style='display:grid;grid-template-columns:1fr 120px 52px;"
-                f"gap:8px;align-items:center;padding:5px 0;"
+                f"<div style='display:grid;grid-template-columns:auto 160px 52px;"
+                f"gap:12px;align-items:center;padding:6px 0;"
                 f"border-bottom:1px solid #D4CFC4;'>"
                 f"<div style='font-size:12px;color:#1A1A14;font-weight:500;"
-                f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
                 f"font-family:DM Sans,sans-serif;'>{nombre}</div>"
-                f"<div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
-                f"<div style='background:{color};width:{pct}%;height:16px;"
+                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;flex-shrink:0;'>"
+                f"<div style='background:{color};width:{pct}%;height:14px;"
                 f"border-radius:3px;opacity:0.9;'></div>"
                 f"</div>"
                 f"<div style='font-family:DM Mono,monospace;font-size:11px;"
-                f"color:#1A1A14;text-align:right;'>{int(val)} u</div>"
+                f"color:#1A1A14;text-align:right;flex-shrink:0;'>{int(val)} u</div>"
                 f"</div>"
             )
         st.markdown(
@@ -930,16 +929,15 @@ def vista_dashboard(df, locations):
     for tipo, val, txt in zip(por_tipo["Tipo"].tolist()[::-1], x_cat.tolist()[::-1], txt_cat[::-1]):
         pct = int(val / max_cat * 100)
         cat_rows += (
-            f"<div style='display:grid;grid-template-columns:200px 1fr 110px;"
-            f"gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #D4CFC4;'>"
+            f"<div style='display:grid;grid-template-columns:auto 160px 120px;"
+            f"gap:12px;align-items:center;padding:6px 0;border-bottom:1px solid #D4CFC4;'>"
             f"<div style='font-size:12px;color:#1A1A14;font-weight:500;"
-            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
             f"font-family:DM Sans,sans-serif;'>{str(tipo)}</div>"
-            f"<div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
-            f"<div style='background:#4488FF;width:{pct}%;height:16px;border-radius:3px;opacity:0.85;'></div>"
+            f"<div style='background:#D4CFC4;border-radius:3px;height:14px;flex-shrink:0;'>"
+            f"<div style='background:#4488FF;width:{pct}%;height:14px;border-radius:3px;opacity:0.85;'></div>"
             f"</div>"
             f"<div style='font-family:DM Mono,monospace;font-size:11px;"
-            f"color:#1A1A14;text-align:right;'>{txt}</div>"
+            f"color:#1A1A14;text-align:right;flex-shrink:0;'>{txt}</div>"
             f"</div>"
         )
     st.markdown(f"<div style='padding:8px 0;'>{cat_rows}</div>", unsafe_allow_html=True)
