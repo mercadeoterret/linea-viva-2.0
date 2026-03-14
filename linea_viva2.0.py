@@ -248,11 +248,25 @@ def shopify_get_token():
             if tok:
                 st.session_state["shopify_token"] = tok
                 st.query_params.clear()
-                st.success(
-                    f"✅ Shopify conectado. Copia este token en tus Streamlit secrets como "
-                    f"`SHOPIFY_ACCESS_TOKEN`:\n\n`{tok}`"
+                st.markdown(
+                    "<div style='max-width:600px;margin:60px auto;'>"
+                    "<div style='background:#2D6A4F;color:#F5F0E8;border-radius:8px 8px 0 0;"
+                    "padding:16px 20px;font-family:Bebas Neue,sans-serif;font-size:18px;"
+                    "letter-spacing:2px;'>✅ SHOPIFY CONECTADO</div>"
+                    "<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-top:none;"
+                    "border-radius:0 0 8px 8px;padding:20px;'>"
+                    "<div style='font-size:13px;color:#1A1A14;margin-bottom:12px;'>"
+                    "Copia este token y agrégalo a los Secrets de Streamlit Cloud "
+                    "como <b>SHOPIFY_ACCESS_TOKEN</b>:</div>"
+                    f"<div style='background:#1A1A14;color:#2DFF6E;font-family:DM Mono,monospace;"
+                    f"font-size:13px;padding:14px 16px;border-radius:6px;"
+                    f"word-break:break-all;user-select:all;'>{tok}</div>"
+                    "<div style='font-size:11px;color:#6B6456;margin-top:12px;'>"
+                    "Después de agregarlo en Secrets → Redeployar la app → Listo, no lo necesitas más.</div>"
+                    "</div></div>",
+                    unsafe_allow_html=True,
                 )
-                st.rerun()
+                st.stop()
         st.error("Error al obtener token. Intenta de nuevo.")
         st.query_params.clear()
         st.stop()
