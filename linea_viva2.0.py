@@ -1246,53 +1246,79 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
-    col_l, col_r = st.columns(2)
-    with col_l:
-        st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#6B6456;margin-bottom:6px;'>TOP PRODUCTOS</div>",
-            unsafe_allow_html=True,
-        )
-        tp = (
-            df_v.groupby("producto")
-            .agg(total=("total", "sum"), unidades=("cantidad", "sum"))
-            .reset_index()
-            .sort_values("total", ascending=True)
-            .tail(15)
-        )
-        fig_tp = go.Figure(go.Bar(
-            x=tp["total"], y=tp["producto"], orientation="h",
-            marker=dict(color="#2D6A4F", opacity=0.85),
-            text=[fmt_pesos(v) for v in tp["total"]], textposition="outside",
-            textfont=dict(size=9),
-            hovertemplate="<b>%{y}</b><br>%{text}<extra></extra>",
-        ))
-        fig_tp.update_layout(
-            **PLOT_BASE, height=400,
-            margin=dict(t=10, b=10, l=220, r=80),
-            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
-        )
-        st.plotly_chart(fig_tp, use_container_width=True, config={"displayModeBar": False})
+    # ── Top Productos — tabla HTML ancho completo ────────────────────────────
+    _seccion("TOP PRODUCTOS", f"Por valor de venta · {sel_rango}")
+    tp = (
+        df_v.groupby("producto")
+        .agg(total=("total", "sum"), unidades=("cantidad", "sum"))
+        .reset_index()
+        .sort_values("total", ascending=False)
+        .head(15)
+    )
+    max_tp = tp["total"].max() if len(tp) else 1
+    tp_html = "".join(
+        f"<tr>"
+        f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
+        f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{row.producto}</td>"
+        f"<td style='padding:7px 8px;width:45%;'>"
+        f"<div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
+        f"<div style='background:#2D6A4F;width:{int(row.total/max_tp*100)}%;height:16px;"
+        f"border-radius:3px;opacity:0.85;'></div></div></td>"
+        f"<td style='padding:7px 4px;font-family:DM Mono,monospace;font-size:12px;"
+        f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>{fmt_pesos(row.total)}</td>"
+        f"<td style='padding:7px 0 7px 12px;font-family:DM Mono,monospace;font-size:12px;"
+        f"color:#6B6456;text-align:right;white-space:nowrap;'>{int(row.unidades)} u</td>"
+        f"</tr>"
+        for row in tp.itertuples()
+    )
+    st.markdown(
+        f"<table style='width:100%;border-collapse:collapse;'><tbody>{tp_html}</tbody></table>",
+        unsafe_allow_html=True,
+    )
 
-    with col_r:
+    # ── Detalle por SKU — cards agrupados por producto ────────────────────────
+    _seccion("DETALLE POR SKU", "Variantes ordenadas por unidades vendidas")
+    det = (
+        df_v.groupby(["producto", "sku", "variante"])
+        .agg(unidades=("cantidad", "sum"), total=("total", "sum"))
+        .reset_index()
+        .sort_values(["producto", "unidades"], ascending=[True, False])
+    )
+    for prod, grupo in det.groupby("producto", sort=False):
+        total_prod = grupo["total"].sum()
+        unids_prod = int(grupo["unidades"].sum())
+        # Cabecera producto
         st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#6B6456;margin-bottom:6px;'>DETALLE POR SKU</div>",
+            f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
+            f"border-left:3px solid #2D6A4F;border-radius:6px 6px 0 0;"
+            f"padding:10px 14px;display:flex;align-items:center;justify-content:space-between;'>"
+            f"<div style='font-weight:600;font-size:13px;color:#1A1A14;"
+            f"font-family:DM Sans,sans-serif;'>{prod}</div>"
+            f"<div style='font-family:DM Mono,monospace;font-size:12px;color:#2D6A4F;'>"
+            f"{fmt_pesos(total_prod)} · {unids_prod} u</div>"
+            f"</div>",
             unsafe_allow_html=True,
         )
-        det = (
-            df_v.groupby(["producto", "sku", "variante"])
-            .agg(unidades=("cantidad", "sum"), total=("total", "sum"))
-            .reset_index()
-            .sort_values("unidades", ascending=False)
+        # Filas de variantes
+        rows_sku = "".join(
+            f"<tr style='border-top:1px solid #D4CFC4;'>"
+            f"<td style='padding:6px 14px;font-size:12px;color:#6B6456;"
+            f"font-family:DM Mono,monospace;white-space:nowrap;'>{r.sku}</td>"
+            f"<td style='padding:6px 14px;font-size:12px;color:#1A1A14;"
+            f"font-family:DM Sans,sans-serif;'>{r.variante}</td>"
+            f"<td style='padding:6px 14px;font-family:DM Mono,monospace;font-size:12px;"
+            f"color:#1A1A14;text-align:right;white-space:nowrap;'>{int(r.unidades)} u</td>"
+            f"<td style='padding:6px 14px;font-family:DM Mono,monospace;font-size:12px;"
+            f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>{fmt_pesos(r.total)}</td>"
+            f"</tr>"
+            for r in grupo.itertuples()
         )
-        det["Valor"] = det["total"].apply(fmt_pesos)
-        st.dataframe(
-            det[["producto", "sku", "variante", "unidades", "Valor"]].rename(columns={
-                "producto": "Producto", "sku": "SKU", "variante": "Variante", "unidades": "Unidades",
-            }),
-            use_container_width=True, hide_index=True,
+        st.markdown(
+            f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-top:none;"
+            f"border-left:3px solid #2D6A4F;border-radius:0 0 6px 6px;overflow:hidden;'>"
+            f"<table style='width:100%;border-collapse:collapse;'><tbody>{rows_sku}</tbody></table>"
+            f"</div><div style='height:6px;'></div>",
+            unsafe_allow_html=True,
         )
 
 
