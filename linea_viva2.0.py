@@ -883,26 +883,32 @@ def vista_dashboard(df, locations):
             "#FF3B30" if e == "REPROGRAMAR" else "#4488FF"
             for e in estados
         ]
+        # Renderizar como HTML puro — nombre siempre visible, barra proporcional
         max_x = max(x_vals) if x_vals else 1
-        fig_top = go.Figure(go.Bar(
-            x=x_vals, y=y_vals, orientation="h",
-            marker=dict(color=colores_top),
-            text=[str(int(v)) + " u" for v in x_vals],
-            textposition="outside",
-            textfont=dict(size=11, color="#1A1A14"),
-        ))
-        fig_top.update_layout(
-            paper_bgcolor="#EDEAE0",
-            plot_bgcolor="#EDEAE0",
-            font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=10, b=10, l=340, r=80),
-            height=max(380, n_top * 38),
-            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
-                       showticklabels=False, range=[0, max_x * 1.35]),
-            yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"),
-                       tickcolor="#1A1A14"),
+        # Invertir para mostrar mayor arriba
+        filas = list(zip(y_vals, x_vals, colores_top))[::-1]
+        rows_html = ""
+        for nombre, val, color in filas:
+            pct = int(val / max_x * 100)
+            rows_html += (
+                f"<div style='display:grid;grid-template-columns:1fr 120px 52px;"
+                f"gap:8px;align-items:center;padding:5px 0;"
+                f"border-bottom:1px solid #D4CFC4;'>"
+                f"<div style='font-size:12px;color:#1A1A14;font-weight:500;"
+                f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+                f"font-family:DM Sans,sans-serif;'>{nombre}</div>"
+                f"<div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
+                f"<div style='background:{color};width:{pct}%;height:16px;"
+                f"border-radius:3px;opacity:0.9;'></div>"
+                f"</div>"
+                f"<div style='font-family:DM Mono,monospace;font-size:11px;"
+                f"color:#1A1A14;text-align:right;'>{int(val)} u</div>"
+                f"</div>"
+            )
+        st.markdown(
+            f"<div style='padding:8px 0;'>{rows_html}</div>",
+            unsafe_allow_html=True,
         )
-        st.plotly_chart(fig_top, use_container_width=True, config={"displayModeBar": False})
 
     with col_r2:
         st.markdown(
