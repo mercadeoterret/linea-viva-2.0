@@ -198,10 +198,10 @@ def shopify_get_token():
     if st.session_state.get("shopify_token"):
         return st.session_state["shopify_token"]
 
-    shop          = st.secrets.get("TIENDA_URL", "terret-col.myshopify.com")
-    client_id     = st.secrets.get("SHOPIFY_CLIENT_ID", "0fae2c3260438ee03b795e6f552120b0")
-    client_secret = st.secrets.get("SHOPIFY_CLIENT_SECRET", "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")
-    redirect_uri  = st.secrets.get("REDIRECT_URI", "https://linea-viva-gklx8ezcupejpncx2nzpjw.streamlit.app/")
+    shop          = st.secrets["TIENDA_URL"]
+    client_id     = st.secrets["SHOPIFY_CLIENT_ID"]
+    client_secret = st.secrets["SHOPIFY_CLIENT_SECRET"]
+    redirect_uri  = st.secrets["REDIRECT_URI"]
 
     params = st.query_params
     code   = params.get("code", "")
@@ -266,13 +266,14 @@ def check_google_login():
 
     client_id     = st.secrets.get("GOOGLE_CLIENT_ID", "")
     client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", "")
-    redirect_uri  = st.secrets.get("REDIRECT_URI", "https://linea-viva-gklx8ezcupejpncx2nzpjw.streamlit.app/")
+    redirect_uri  = st.secrets["REDIRECT_URI"]
 
     params    = st.query_params
     auth_code = params.get("code", "")
     state     = params.get("state", "")
 
-    if auth_code and state != "lv7":
+    # Solo procesar si el state es explícitamente de Google
+    if auth_code and state == "google":
         resp = requests.post(
             "https://oauth2.googleapis.com/token",
             data={
@@ -293,7 +294,7 @@ def check_google_login():
             ).json()
             email  = ui.get("email", "").lower()
             domain = email.split("@")[-1] if "@" in email else ""
-            allowed = [d.strip().lower() for d in st.secrets.get("ALLOWED_DOMAINS", "terretsports.com,terret.co").split(",")]
+            allowed = [d.strip().lower() for d in st.secrets["ALLOWED_DOMAINS"].split(",")]
             if domain not in allowed:
                 st.error(f"Acceso denegado: {email}")
                 st.query_params.clear()
@@ -317,6 +318,7 @@ def check_google_login():
         f"&redirect_uri={redirect_enc}"
         "&access_type=offline"
         "&prompt=select_account"
+        "&state=google"
     )
 
     st.markdown(
@@ -345,7 +347,7 @@ def _headers(token):
 
 
 def _shop():
-    return st.secrets.get("TIENDA_URL", "terret-col.myshopify.com")
+    return st.secrets["TIENDA_URL"]
 
 
 def rest_get(token, endpoint, params=None):
