@@ -1547,14 +1547,14 @@ def vista_tendencias(token):
         if top_crec.empty:
             st.info("Sin productos con tendencia creciente significativa.")
         else:
-            max_crec = top_crec["Δ u"].max() or 1
+            max_crec = top_crec["Δ u"].quantile(0.85) or top_crec["Δ u"].max() or 1
             crec_html = "".join(
                 f"<tr>"
                 f"<td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;"
                 f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
                 f"<td style='padding:7px 8px;width:35%;'>"
                 f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
-                f"<div style='background:#2D6A4F;width:{int(r['Δ u']/max_crec*100)}%;height:14px;"
+                f"<div style='background:#2D6A4F;width:{min(100,int(r['Δ u']/max_crec*100))}%;height:14px;"
                 f"border-radius:3px;opacity:0.85;'></div></div></td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
                 f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>"
@@ -1579,14 +1579,14 @@ def vista_tendencias(token):
         if top_dec.empty:
             st.info("Sin productos con tendencia decreciente significativa.")
         else:
-            max_dec = top_dec["Δ u"].abs().max() or 1
+            max_dec = top_dec["Δ u"].abs().quantile(0.85) or top_dec["Δ u"].abs().max() or 1
             dec_html = "".join(
                 f"<tr>"
                 f"<td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;"
                 f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
                 f"<td style='padding:7px 8px;width:35%;'>"
                 f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
-                f"<div style='background:#FF3B30;width:{int(abs(r['Δ u'])/max_dec*100)}%;height:14px;"
+                f"<div style='background:#FF3B30;width:{min(100,int(abs(r['Δ u'])/max_dec*100))}%;height:14px;"
                 f"border-radius:3px;opacity:0.75;'></div></div></td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
                 f"color:#FF3B30;text-align:right;white-space:nowrap;font-weight:600;'>"
