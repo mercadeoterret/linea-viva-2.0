@@ -178,7 +178,6 @@ PLOT_BASE = dict(
     paper_bgcolor="#EDEAE0",
     plot_bgcolor="#EDEAE0",
     font=dict(color="#1A1A14", family="DM Sans"),
-    margin=dict(t=10, b=10, l=10, r=10),
 )
 
 
