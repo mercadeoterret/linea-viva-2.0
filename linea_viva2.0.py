@@ -261,87 +261,41 @@ def shopify_get_token():
 # ─── GOOGLE AUTH ──────────────────────────────────────────────────────────────
 
 def check_google_login():
+    """Login por contrasena — sin OAuth, sin redirects, sin perdida de session_state."""
     if st.session_state.get("logged_in"):
         return
 
-    # Si viene callback de Shopify, no bloquear con login de Google
+    # Si viene callback de Shopify, dejar pasar sin pedir login
     if st.query_params.get("state", "") == "lv7":
         return
 
-
-    client_id     = st.secrets.get("GOOGLE_CLIENT_ID", "")
-    client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", "")
-    redirect_uri  = st.secrets["REDIRECT_URI"]
-
-    params    = st.query_params
-    auth_code = params.get("code", "")
-    state     = params.get("state", "")
-
-    # Solo procesar si el state es explícitamente de Google
-    if auth_code and state == "google":
-        resp = requests.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "code": auth_code,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            },
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            access_token = resp.json().get("access_token", "")
-            ui = requests.get(
-                "https://www.googleapis.com/oauth2/v2/userinfo",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=10,
-            ).json()
-            email  = ui.get("email", "").lower()
-            domain = email.split("@")[-1] if "@" in email else ""
-            allowed = [d.strip().lower() for d in st.secrets["ALLOWED_DOMAINS"].split(",")]
-            if domain not in allowed:
-                st.error(f"Acceso denegado: {email}")
-                st.query_params.clear()
-                st.stop()
-            st.session_state.logged_in  = True
-            st.session_state.user_email = email
-            st.session_state.user_name  = ui.get("name", "")
-            st.query_params.clear()
-            st.rerun()
-        else:
-            st.error("Error de autenticación con Google.")
-            st.query_params.clear()
-            st.stop()
-
-    redirect_enc = urllib.parse.quote(redirect_uri, safe="")
-    login_url = (
-        "https://accounts.google.com/o/oauth2/v2/auth"
-        f"?client_id={client_id}"
-        "&response_type=code"
-        "&scope=openid%20email%20profile"
-        f"&redirect_uri={redirect_enc}"
-        "&access_type=offline"
-        "&prompt=select_account"
-        "&state=google"
-    )
+    app_password = st.secrets.get("APP_PASSWORD", "")
 
     st.markdown(
-        "<div style='max-width:420px;margin:80px auto;text-align:center;'>"
+        "<div style='max-width:380px;margin:80px auto;text-align:center;'>"
         "<div style='background:#2D6A4F;width:56px;height:56px;border-radius:10px;"
         "display:inline-flex;align-items:center;justify-content:center;"
         "font-family:Bebas Neue,sans-serif;font-size:26px;color:#F5F0E8;"
         "margin-bottom:20px;'>LV</div>"
         "<div style='font-family:Bebas Neue,sans-serif;font-size:32px;letter-spacing:3px;"
-        "color:#1A1A14;margin-bottom:4px;'>LÍNEA VIVA</div>"
+        "color:#1A1A14;margin-bottom:4px;'>LINEA VIVA</div>"
         "<div style='font-size:10px;color:#6B6456;letter-spacing:2px;"
-        "text-transform:uppercase;margin-bottom:40px;'>Térret · Inventario</div>"
+        "text-transform:uppercase;margin-bottom:40px;'>Terret · Inventario</div>"
         "</div>",
         unsafe_allow_html=True,
     )
+
     _, col, _ = st.columns([1, 2, 1])
     with col:
-        st.link_button("🔑 INICIAR SESIÓN CON GOOGLE", login_url, use_container_width=True)
+        pwd = st.text_input("Contrasena", type="password", key="login_pwd",
+                            placeholder="Ingresa la contrasena")
+        if st.button("ENTRAR", key="btn_login"):
+            if pwd == app_password:
+                st.session_state.logged_in = True
+                st.session_state.user_name = "Terret"
+                st.rerun()
+            else:
+                st.error("Contrasena incorrecta.")
     st.stop()
 
 
