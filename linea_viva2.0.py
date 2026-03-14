@@ -387,7 +387,7 @@ def cargar_locations(_token):
 def cargar_productos(_token):
     GQL = """
     query($cursor: String) {
-      products(first: 250, after: $cursor) {
+      products(first: 250, after: $cursor, query: "status:active") {
         pageInfo { hasNextPage endCursor }
         edges {
           node {
