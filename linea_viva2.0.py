@@ -871,8 +871,7 @@ def vista_dashboard(df, locations):
                 .sort_values("Ventas60d", ascending=True)
                 .tail(n_top)
             )
-            # Truncar nombre: max 32 chars
-            y_vals  = [p[:32] + "..." if len(p) > 32 else p for p in top_data["Producto"].tolist()]
+            y_vals  = top_data["Producto"].tolist()
             x_vals  = top_data["Ventas60d"].tolist()
             estados = top_data["_estado"].tolist()
 
@@ -882,29 +881,24 @@ def vista_dashboard(df, locations):
             "#FF3B30" if e == "REPROGRAMAR" else "#4488FF"
             for e in estados
         ]
-        # Renderizar como HTML puro — nombre siempre visible, barra proporcional
         max_x = max(x_vals) if x_vals else 1
-        # Invertir para mostrar mayor arriba
         filas = list(zip(y_vals, x_vals, colores_top))[::-1]
-        rows_html = ""
-        for nombre, val, color in filas:
-            pct = int(val / max_x * 100)
-            rows_html += (
-                f"<div style='display:grid;grid-template-columns:auto 160px 52px;"
-                f"gap:12px;align-items:center;padding:6px 0;"
-                f"border-bottom:1px solid #D4CFC4;'>"
-                f"<div style='font-size:12px;color:#1A1A14;font-weight:500;"
-                f"font-family:DM Sans,sans-serif;'>{nombre}</div>"
-                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;flex-shrink:0;'>"
-                f"<div style='background:{color};width:{pct}%;height:14px;"
-                f"border-radius:3px;opacity:0.9;'></div>"
-                f"</div>"
-                f"<div style='font-family:DM Mono,monospace;font-size:11px;"
-                f"color:#1A1A14;text-align:right;flex-shrink:0;'>{int(val)} u</div>"
-                f"</div>"
-            )
+        filas_html = "".join(
+            f"<tr>"
+            f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
+            f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{nombre}</td>"
+            f"<td style='padding:7px 8px;width:35%;'>"
+            f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+            f"<div style='background:{color};width:{int(val/max_x*100)}%;height:14px;"
+            f"border-radius:3px;opacity:0.9;'></div></div></td>"
+            f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
+            f"color:#6B6456;text-align:right;white-space:nowrap;'>{int(val)} u</td>"
+            f"</tr>"
+            for nombre, val, color in filas
+        )
         st.markdown(
-            f"<div style='padding:8px 0;'>{rows_html}</div>",
+            f"<table style='width:100%;border-collapse:collapse;'>"
+            f"<tbody>{filas_html}</tbody></table>",
             unsafe_allow_html=True,
         )
 
@@ -925,22 +919,25 @@ def vista_dashboard(df, locations):
     x_cat   = por_tipo["valor_costo"] if tiene_costos else por_tipo["stock"]
     txt_cat = ["$" + f"{v:,.0f}" for v in x_cat] if tiene_costos else [str(int(v)) + " u" for v in x_cat]
     max_cat = x_cat.max() if len(x_cat) > 0 else 1
-    cat_rows = ""
-    for tipo, val, txt in zip(por_tipo["Tipo"].tolist()[::-1], x_cat.tolist()[::-1], txt_cat[::-1]):
-        pct = int(val / max_cat * 100)
-        cat_rows += (
-            f"<div style='display:grid;grid-template-columns:auto 160px 120px;"
-            f"gap:12px;align-items:center;padding:6px 0;border-bottom:1px solid #D4CFC4;'>"
-            f"<div style='font-size:12px;color:#1A1A14;font-weight:500;"
-            f"font-family:DM Sans,sans-serif;'>{str(tipo)}</div>"
-            f"<div style='background:#D4CFC4;border-radius:3px;height:14px;flex-shrink:0;'>"
-            f"<div style='background:#4488FF;width:{pct}%;height:14px;border-radius:3px;opacity:0.85;'></div>"
-            f"</div>"
-            f"<div style='font-family:DM Mono,monospace;font-size:11px;"
-            f"color:#1A1A14;text-align:right;flex-shrink:0;'>{txt}</div>"
-            f"</div>"
-        )
-    st.markdown(f"<div style='padding:8px 0;'>{cat_rows}</div>", unsafe_allow_html=True)
+    cat_filas = list(zip(por_tipo["Tipo"].tolist()[::-1], x_cat.tolist()[::-1], txt_cat[::-1]))
+    cat_html = "".join(
+        f"<tr>"
+        f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
+        f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{str(tipo)}</td>"
+        f"<td style='padding:7px 8px;width:50%;'>"
+        f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+        f"<div style='background:#4488FF;width:{int(val/max_cat*100)}%;height:14px;"
+        f"border-radius:3px;opacity:0.85;'></div></div></td>"
+        f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
+        f"color:#6B6456;text-align:right;white-space:nowrap;'>{txt}</td>"
+        f"</tr>"
+        for tipo, val, txt in cat_filas
+    )
+    st.markdown(
+        f"<table style='width:100%;border-collapse:collapse;'>"
+        f"<tbody>{cat_html}</tbody></table>",
+        unsafe_allow_html=True,
+    )
 
     # ── FILA 3: Valor de Inventario por Categoria ─────────────────────────────
     if tiene_costos or tiene_precios:
