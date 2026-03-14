@@ -1541,56 +1541,66 @@ def vista_tendencias(token):
     with col_l:
         st.markdown(
             "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#2D6A4F;margin-bottom:6px;'>ACELERANDO</div>",
+            "letter-spacing:2px;color:#2D6A4F;margin-bottom:10px;'>📈 ACELERANDO</div>",
             unsafe_allow_html=True,
         )
         if top_crec.empty:
             st.info("Sin productos con tendencia creciente significativa.")
         else:
-            fig_crec = go.Figure(go.Bar(
-                x=top_crec["Δ u"],
-                y=top_crec["Producto"].str[:30],
-                orientation="h",
-                marker=dict(color="#2D6A4F", opacity=0.85),
-                text=[f"+{int(r['Últimos 30d'])} u ({r['Δ %']:+.0f}%)" for _, r in top_crec.iterrows()],
-                textposition="outside",
-                textfont=dict(size=9),
-                hovertemplate="<b>%{y}</b><br>+%{x} u vs período anterior<extra></extra>",
-            ))
-            fig_crec.update_layout(
-                **PLOT_BASE, height=max(260, len(top_crec) * 32),
-                margin=dict(t=10, b=10, l=200, r=140),
-                xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-                yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+            max_crec = top_crec["Δ u"].max() or 1
+            crec_html = "".join(
+                f"<tr>"
+                f"<td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;"
+                f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r.Producto}</td>"
+                f"<td style='padding:7px 8px;width:35%;'>"
+                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+                f"<div style='background:#2D6A4F;width:{int(getattr(r,'Δ u',0)/max_crec*100)}%;height:14px;"
+                f"border-radius:3px;opacity:0.85;'></div></div></td>"
+                f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
+                f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>"
+                f"+{int(getattr(r,'Últimos 30d',0))} u</td>"
+                f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
+                f"color:#6B6456;text-align:right;white-space:nowrap;'>"
+                f"{getattr(r,'Δ %',0):+.0f}%</td>"
+                f"</tr>"
+                for r in top_crec.itertuples()
             )
-            st.plotly_chart(fig_crec, use_container_width=True, config={"displayModeBar": False})
+            st.markdown(
+                f"<table style='width:100%;border-collapse:collapse;'><tbody>{crec_html}</tbody></table>",
+                unsafe_allow_html=True,
+            )
 
     with col_r:
         st.markdown(
             "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#FF3B30;margin-bottom:6px;'>DESACELERANDO</div>",
+            "letter-spacing:2px;color:#FF3B30;margin-bottom:10px;'>📉 DESACELERANDO</div>",
             unsafe_allow_html=True,
         )
         if top_dec.empty:
             st.info("Sin productos con tendencia decreciente significativa.")
         else:
-            fig_dec = go.Figure(go.Bar(
-                x=top_dec["Δ u"].abs(),
-                y=top_dec["Producto"].str[:30],
-                orientation="h",
-                marker=dict(color="#FF3B30", opacity=0.75),
-                text=[f"{int(r['Últimos 30d'])} u ({r['Δ %']:+.0f}%)" for _, r in top_dec.iterrows()],
-                textposition="outside",
-                textfont=dict(size=9),
-                hovertemplate="<b>%{y}</b><br>%{x} u menos vs período anterior<extra></extra>",
-            ))
-            fig_dec.update_layout(
-                **PLOT_BASE, height=max(260, len(top_dec) * 32),
-                margin=dict(t=10, b=10, l=200, r=140),
-                xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-                yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+            max_dec = top_dec["Δ u"].abs().max() or 1
+            dec_html = "".join(
+                f"<tr>"
+                f"<td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;"
+                f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r.Producto}</td>"
+                f"<td style='padding:7px 8px;width:35%;'>"
+                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+                f"<div style='background:#FF3B30;width:{int(abs(getattr(r,'Δ u',0))/max_dec*100)}%;height:14px;"
+                f"border-radius:3px;opacity:0.75;'></div></div></td>"
+                f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
+                f"color:#FF3B30;text-align:right;white-space:nowrap;font-weight:600;'>"
+                f"{int(getattr(r,'Últimos 30d',0))} u</td>"
+                f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
+                f"color:#6B6456;text-align:right;white-space:nowrap;'>"
+                f"{getattr(r,'Δ %',0):+.0f}%</td>"
+                f"</tr>"
+                for r in top_dec.itertuples()
             )
-            st.plotly_chart(fig_dec, use_container_width=True, config={"displayModeBar": False})
+            st.markdown(
+                f"<table style='width:100%;border-collapse:collapse;'><tbody>{dec_html}</tbody></table>",
+                unsafe_allow_html=True,
+            )
 
     st.markdown(
         "<div style='font-size:10px;color:#B8B0A4;margin-bottom:20px;'>"
