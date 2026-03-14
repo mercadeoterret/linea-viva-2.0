@@ -656,26 +656,23 @@ def vista_dashboard(df, locations):
         seg.columns = ["Estado", "N"]
         seg = seg[seg["N"] > 0]
 
+        labels_pie  = [ESTADOS.get(e, {}).get("label", e) for e in seg["Estado"]]
+        colors_pie  = [color_estado(e) for e in seg["Estado"]]
         fig_pie = go.Figure(go.Pie(
-            labels=[ESTADOS.get(e, {}).get("label", e) for e in seg["Estado"]],
+            labels=labels_pie,
             values=seg["N"],
             hole=0.6,
-            marker=dict(colors=[color_estado(e) for e in seg["Estado"]], line=dict(color="#F5F0E8", width=2)),
-            textinfo="percent",
-            textfont=dict(size=12),
+            marker=dict(colors=colors_pie, line=dict(color="#F5F0E8", width=2)),
+            textinfo="label+percent",
+            textposition="outside",
+            textfont=dict(size=10),
             hovertemplate="<b>%{label}</b><br>%{value} productos · %{percent}<extra></extra>",
+            automargin=True,
         ))
         fig_pie.update_layout(
-            **PLOT_BASE, height=360,
-            margin=dict(t=10, b=10, l=10, r=160),
-            showlegend=True,
-            legend=dict(
-                orientation="v",
-                yanchor="middle", y=0.5,
-                xanchor="left", x=1.02,
-                font=dict(size=11),
-                bgcolor="rgba(0,0,0,0)",
-            ),
+            **PLOT_BASE, height=380,
+            margin=dict(t=40, b=40, l=80, r=80),
+            showlegend=False,
             annotations=[dict(text=f"<b>{total_prods}</b><br>productos",
                               x=0.5, y=0.5, font_size=16, showarrow=False,
                               font=dict(color="#1A1A14"))],
@@ -801,19 +798,22 @@ def vista_dashboard(df, locations):
         x_cat   = por_tipo["valor_costo"] if tiene_costos else por_tipo["stock"]
         txt_cat = [fmt_pesos(v) for v in x_cat] if tiene_costos else [f"{int(v)} u" for v in x_cat]
 
-        fig_cat = go.Figure(go.Bar(
-            x=x_cat, y=por_tipo["Tipo"].str[:22], orientation="h",
-            marker=dict(color="#4488FF", opacity=0.85),
-            text=txt_cat, textposition="outside", textfont=dict(size=9),
-            hovertemplate="<b>%{y}</b><br>%{text}<extra></extra>",
-        ))
-        fig_cat.update_layout(
-            **PLOT_BASE, height=300,
-            margin=dict(t=10, b=10, l=10, r=80),
-            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=9)),
-        )
-        st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+        # Mismo enfoque HTML para consistencia visual
+        max_cat = x_cat.max() if len(x_cat) > 0 else 1
+        for tipo, val, txt in zip(por_tipo["Tipo"], x_cat, txt_cat):
+            pct = int(val / max_cat * 100) if max_cat > 0 else 0
+            st.markdown(
+                f"<div style='display:grid;grid-template-columns:150px 1fr 90px;"
+                f"gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid #D4CFC4;'>"
+                f"<div style='font-size:11px;color:#1A1A14;font-weight:500;"
+                f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>{str(tipo)[:22]}</div>"
+                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+                f"<div style='background:#4488FF;width:{pct}%;height:14px;border-radius:3px;opacity:0.85;'></div>"
+                f"</div>"
+                f"<div style='font-family:DM Mono,monospace;font-size:10px;color:#6B6456;text-align:right;'>{txt}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
     # Valor por categoría
     if tiene_costos or tiene_precios:
@@ -849,12 +849,12 @@ def vista_dashboard(df, locations):
         fig_val.update_layout(
             barmode="overlay", **PLOT_BASE,
             height=max(320, len(cats) * 38),
-            margin=dict(t=30, b=20, l=160, r=90),
+            margin=dict(t=30, b=20, l=200, r=100),
             legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0,
                         font=dict(size=10), bgcolor="rgba(0,0,0,0)", traceorder="reversed"),
             xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
-                       tickprefix="$", tickformat=",.0f", tickfont=dict(size=9)),
-            yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=False,
+                       showticklabels=False),
+            yaxis=dict(showgrid=False, tickfont=dict(size=10),
                        categoryorder="array", categoryarray=cats),
         )
         st.plotly_chart(fig_val, use_container_width=True, config={"displayModeBar": False})
