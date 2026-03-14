@@ -1551,19 +1551,19 @@ def vista_tendencias(token):
             crec_html = "".join(
                 f"<tr>"
                 f"<td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;"
-                f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r.Producto}</td>"
+                f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
                 f"<td style='padding:7px 8px;width:35%;'>"
                 f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
-                f"<div style='background:#2D6A4F;width:{int(getattr(r,'Δ u',0)/max_crec*100)}%;height:14px;"
+                f"<div style='background:#2D6A4F;width:{int(r['Δ u']/max_crec*100)}%;height:14px;"
                 f"border-radius:3px;opacity:0.85;'></div></div></td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
                 f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>"
-                f"+{int(getattr(r,'Últimos 30d',0))} u</td>"
+                f"+{int(r['Últimos 30d'])} u</td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
                 f"color:#6B6456;text-align:right;white-space:nowrap;'>"
-                f"{getattr(r,'Δ %',0):+.0f}%</td>"
+                f"{r['Δ %']:+.0f}%</td>"
                 f"</tr>"
-                for r in top_crec.itertuples()
+                for _, r in top_crec.iterrows()
             )
             st.markdown(
                 f"<table style='width:100%;border-collapse:collapse;'><tbody>{crec_html}</tbody></table>",
@@ -1583,19 +1583,19 @@ def vista_tendencias(token):
             dec_html = "".join(
                 f"<tr>"
                 f"<td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;"
-                f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r.Producto}</td>"
+                f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
                 f"<td style='padding:7px 8px;width:35%;'>"
                 f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
-                f"<div style='background:#FF3B30;width:{int(abs(getattr(r,'Δ u',0))/max_dec*100)}%;height:14px;"
+                f"<div style='background:#FF3B30;width:{int(abs(r['Δ u'])/max_dec*100)}%;height:14px;"
                 f"border-radius:3px;opacity:0.75;'></div></div></td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
                 f"color:#FF3B30;text-align:right;white-space:nowrap;font-weight:600;'>"
-                f"{int(getattr(r,'Últimos 30d',0))} u</td>"
+                f"{int(r['Últimos 30d'])} u</td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
                 f"color:#6B6456;text-align:right;white-space:nowrap;'>"
-                f"{getattr(r,'Δ %',0):+.0f}%</td>"
+                f"{r['Δ %']:+.0f}%</td>"
                 f"</tr>"
-                for r in top_dec.itertuples()
+                for _, r in top_dec.iterrows()
             )
             st.markdown(
                 f"<table style='width:100%;border-collapse:collapse;'><tbody>{dec_html}</tbody></table>",
