@@ -666,13 +666,13 @@ def vista_dashboard(df, locations):
             hovertemplate="<b>%{label}</b><br>%{value} productos · %{percent}<extra></extra>",
         ))
         fig_pie.update_layout(
-            **PLOT_BASE, height=340,
-            margin=dict(t=10, b=80, l=10, r=10),
+            **PLOT_BASE, height=360,
+            margin=dict(t=10, b=10, l=10, r=160),
             showlegend=True,
             legend=dict(
-                orientation="h",
-                yanchor="bottom", y=-0.35,
-                xanchor="center", x=0.5,
+                orientation="v",
+                yanchor="middle", y=0.5,
+                xanchor="left", x=1.02,
                 font=dict(size=11),
                 bgcolor="rgba(0,0,0,0)",
             ),
@@ -715,9 +715,10 @@ def vista_dashboard(df, locations):
                     return f"QUIEBRE · {int(row['ventas'])} u/60d"
                 return f"{int(row['dias_min'])}d · {int(row['ventas'])} u/60d"
 
+            criticos["prod_label"] = criticos["Producto"].str[:30]
             fig_crit = go.Figure(go.Bar(
                 x=criticos["ventas"],
-                y=list(range(len(criticos))),
+                y=criticos["prod_label"],
                 orientation="h",
                 marker=dict(
                     color=criticos["stock"].apply(lambda s: "#FF3B30" if s == 0 else "#FFB800"),
@@ -730,14 +731,10 @@ def vista_dashboard(df, locations):
             ))
             fig_crit.update_layout(
                 **PLOT_BASE, height=340,
-                margin=dict(t=10, b=10, l=10, r=150),
+                margin=dict(t=10, b=10, l=220, r=180),
                 xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
                            showticklabels=False),
-                yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True,
-                           tickmode="array",
-                           tickvals=list(range(len(criticos))),
-                           ticktext=[p[:28] + "..." if len(p) > 28 else p
-                                     for p in criticos["Producto"].tolist()]),
+                yaxis=dict(showgrid=False, tickfont=dict(size=10)),
             )
             st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
 
