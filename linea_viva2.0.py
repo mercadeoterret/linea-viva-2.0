@@ -626,6 +626,16 @@ def render_sidebar(conteos):
 
 # ─── MÓDULO 0: DASHBOARD ──────────────────────────────────────────────────────
 
+def _seccion(titulo, subtitulo=""):
+    sub_html = f"<div style='font-size:11px;color:#6B6456;letter-spacing:0.5px;margin-top:2px;'>{subtitulo}</div>" if subtitulo else ""
+    st.markdown(
+        f"<div style='margin:32px 0 16px 0;padding-bottom:10px;border-bottom:2px solid #D4CFC4;'>"
+        f"<div style='font-family:Bebas Neue,sans-serif;font-size:18px;letter-spacing:3px;color:#1A1A14;'>{titulo}</div>"
+        f"{sub_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def vista_dashboard(df, locations):
     st.markdown(
         "<div style='font-family:Bebas Neue,sans-serif;font-size:26px;"
@@ -743,17 +753,13 @@ def vista_dashboard(df, locations):
                     unsafe_allow_html=True,
                 )
 
-    st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+    _seccion('VISIÓN GENERAL', 'Segmentos de inventario y productos críticos')
 
     # ── FILA 1: Pastel + Stock Critico ────────────────────────────────────────
     col_l, col_r = st.columns(2)
 
     with col_l:
-        st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
-            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>SEGMENTOS</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown("<div style='font-family:Bebas Neue,sans-serif;font-size:13px;letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>SEGMENTOS</div>", unsafe_allow_html=True)
         seg = df_view.groupby("_estado")["Producto"].nunique().reset_index()
         seg.columns = ["Estado", "Productos"]
         seg = seg[seg["Productos"] > 0]
@@ -786,11 +792,7 @@ def vista_dashboard(df, locations):
         st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
 
     with col_r:
-        st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
-            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>STOCK CRITICO — TOP 10</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown("<div style='font-family:Bebas Neue,sans-serif;font-size:13px;letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>STOCK CRÍTICO — TOP 10</div>", unsafe_allow_html=True)
         criticos = (
             df_view[df_view["_estado"] == "REPROGRAMAR"]
             .groupby("Producto")
@@ -836,19 +838,18 @@ def vista_dashboard(df, locations):
             )
             st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
 
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+    _seccion('TOP VENTAS 60D', 'Productos activos · últimos 60 días')
     # ── FILA 2: Top Ventas (ancho completo) ──────────────────────────────────
-    tc1, tc2, tc3 = st.columns([6, 1, 1])
+    tc1, tc2, tc3 = st.columns([8, 1, 1])
     with tc1:
-        st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
-            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>TOP VENTAS 60D</div>",
-            unsafe_allow_html=True,
-        )
+        pass
     with tc2:
         n_top = st.select_slider("", options=[10, 15, 20, 30, 50], value=10,
                                  key="slider_top_ventas", label_visibility="collapsed")
     with tc3:
         vista_sku = st.toggle("Por SKU", key="toggle_top_sku", value=False)
+
 
     if True:  # bloque unico para mantener indentacion
 
@@ -902,12 +903,7 @@ def vista_dashboard(df, locations):
             unsafe_allow_html=True,
         )
 
-    # ── FILA 3: Stock por Categoria (ancho completo) ─────────────────────────
-    st.markdown(
-        "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
-        "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>STOCK POR CATEGORIA</div>",
-        unsafe_allow_html=True,
-    )
+    _seccion('STOCK POR CATEGORÍA', 'Valor en inventario por línea de producto')
     por_tipo = (
         df_view[df_view["Tipo"].str.strip() != ""]
         .groupby("Tipo")
@@ -941,11 +937,7 @@ def vista_dashboard(df, locations):
 
     # ── FILA 3: Valor de Inventario por Categoria ─────────────────────────────
     if tiene_costos or tiene_precios:
-        st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
-            "letter-spacing:2px;color:#6B6456;margin:8px 0;'>VALOR DE INVENTARIO POR CATEGORIA</div>",
-            unsafe_allow_html=True,
-        )
+        _seccion('VALOR DE INVENTARIO', 'Costo vs precio de venta · por categoría')
         pv = (
             df_view[df_view["Tipo"].str.strip() != ""]
             .groupby("Tipo")
@@ -958,46 +950,43 @@ def vista_dashboard(df, locations):
         costos = pv["vc"].tolist()
         ventas = pv["vv"].tolist()
 
-        fig_val = go.Figure()
-        cats_short = [c[:18] + "..." if len(c) > 18 else c for c in cats]
-        fig_val.add_trace(go.Bar(
-            name="Precio venta", x=ventas, y=cats_short, orientation="h",
-            marker=dict(color="#2D6A4F", opacity=0.85),
-            text=["$" + f"{v/1e6:.1f}M" if v >= 1e6 else "$" + f"{v:,.0f}" for v in ventas],
-            textposition="outside",
-            textfont=dict(size=9, color="#2D6A4F"),
-            hovertemplate="<b>%{y}</b><br>Venta: $%{x:,.0f}<extra></extra>",
-        ))
-        fig_val.add_trace(go.Bar(
-            name="Costo", x=costos, y=cats_short, orientation="h",
-            marker=dict(color="#4488FF", opacity=0.9),
-            text=["$" + f"{v/1e6:.1f}M" if v >= 1e6 else "$" + f"{v:,.0f}" for v in costos],
-            textposition="inside",
-            textfont=dict(size=8, color="#1A1A14"),
-            hovertemplate="<b>%{y}</b><br>Costo: $%{x:,.0f}<extra></extra>",
-        ))
-        fig_val.update_layout(
-            barmode="overlay",
-            paper_bgcolor="#EDEAE0",
-            plot_bgcolor="#EDEAE0",
-            font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=30, b=20, l=180, r=110),
-            height=max(360, len(cats) * 42),
-            legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0,
-                        font=dict(size=11), bgcolor="rgba(0,0,0,0)", traceorder="reversed"),
-            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
-                       showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14",
-                       categoryorder="array", categoryarray=cats_short),
+        max_vv = max(ventas) if ventas else 1
+        # Leyenda
+        st.markdown(
+            "<div style='display:flex;gap:20px;margin-bottom:8px;font-size:12px;'>"
+            "<span style='display:flex;align-items:center;gap:6px;'>"
+            "<span style='display:inline-block;width:14px;height:14px;background:#2D6A4F;border-radius:2px;opacity:0.85;'></span>"
+            "<span style='color:#1A1A14;'>Precio venta</span></span>"
+            "<span style='display:flex;align-items:center;gap:6px;'>"
+            "<span style='display:inline-block;width:14px;height:14px;background:#4488FF;border-radius:2px;opacity:0.9;'></span>"
+            "<span style='color:#1A1A14;'>Costo</span></span>"
+            "</div>",
+            unsafe_allow_html=True,
         )
-        st.plotly_chart(fig_val, use_container_width=True, config={"displayModeBar": False})
+        val_filas = list(zip(cats[::-1], costos[::-1], ventas[::-1]))
+        val_html = "".join(
+            f"<tr>"
+            f"<td style='padding:6px 12px 6px 0;font-size:13px;font-weight:500;"
+            f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;"
+            f"min-width:140px;'>{cat}</td>"
+            f"<td style='padding:6px 8px;width:55%;position:relative;'>"
+            f"<div style='background:#D4CFC4;border-radius:3px;height:18px;position:relative;'>"
+            f"<div style='background:#2D6A4F;width:{int(vv/max_vv*100)}%;height:18px;border-radius:3px;opacity:0.85;position:absolute;top:0;left:0;'></div>"
+            f"<div style='background:#4488FF;width:{int(vc/max_vv*100)}%;height:18px;border-radius:3px;opacity:0.9;position:absolute;top:0;left:0;'></div>"
+            f"</div></td>"
+            f"<td style='padding:6px 4px;font-family:DM Mono,monospace;font-size:11px;"
+            f"color:#2D6A4F;text-align:right;white-space:nowrap;'>{'$'+f'{vv/1e6:.1f}M' if vv>=1e6 else '$'+f'{vv:,.0f}'}</td>"
+            f"<td style='padding:6px 0 6px 8px;font-family:DM Mono,monospace;font-size:11px;"
+            f"color:#4488FF;text-align:right;white-space:nowrap;'>{'$'+f'{vc/1e6:.1f}M' if vc>=1e6 else '$'+f'{vc:,.0f}'}</td>"
+            f"</tr>"
+            for cat, vc, vv in val_filas
+        )
+        st.markdown(
+            f"<table style='width:100%;border-collapse:collapse;'><tbody>{val_html}</tbody></table>",
+            unsafe_allow_html=True,
+        )
 
-    # ── Tabla resumen por segmento ────────────────────────────────────────────
-    st.markdown(
-        "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
-        "letter-spacing:2px;color:#6B6456;margin:8px 0;'>RESUMEN POR SEGMENTO</div>",
-        unsafe_allow_html=True,
-    )
+    _seccion('RESUMEN POR SEGMENTO')
     resumen = []
     for estado in ORDEN_SIDEBAR:
         cfg = ESTADOS[estado]
