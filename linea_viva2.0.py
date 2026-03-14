@@ -536,13 +536,14 @@ def construir_df(productos, stock_map, ventas_map, locations):
                 "SKU":          var["sku"],
                 "Precio Venta": var["price"],
                 "Costo":        var["cost"],
-                "Stock":        stock_total,    # disponible
-                "StockFisico":  on_hand_total,  # existencias físicas
-                "Comprometido": committed,       # reservado en órdenes
+                "Stock":        stock_total,
+                "StockFisico":  on_hand_total,
+                "Comprometido": committed,
                 "Ventas60d":    ventas60d,
                 "DiasInv_n":    dias_inv,
                 "_variant_id":  vid,
                 "_inv_item_id": iid,
+                "_product_id":  prod["product_id"],
             }
             # Stock disponible y físico por location
             for loc_id, loc_name in loc_id_to_name.items():
@@ -860,21 +861,19 @@ def vista_dashboard(df, locations):
             x_vals  = top_data["Ventas60d"].tolist()
             estados = top_data["_estado"].tolist()
         else:
-            # Estado predominante = el del SKU con más ventas dentro del producto
-            def estado_predominante(g):
-                return g.loc[g["Ventas60d"].idxmax(), "_estado"]
-
             top_data = (
-                df_view.groupby("Producto")
+                df_view.groupby("_product_id")
                 .apply(lambda g: pd.Series({
+                    "Producto":  g["Producto"].iloc[0],
                     "Ventas60d": g["Ventas60d"].sum(),
                     "_estado":   g.loc[g["Ventas60d"].idxmax(), "_estado"],
                 }))
-                .reset_index()
+                .reset_index(drop=True)
                 .sort_values("Ventas60d", ascending=True)
                 .tail(n_top)
             )
-            y_vals  = top_data["Producto"].tolist()
+            # Truncar nombre: max 32 chars
+            y_vals  = [p[:32] + "..." if len(p) > 32 else p for p in top_data["Producto"].tolist()]
             x_vals  = top_data["Ventas60d"].tolist()
             estados = top_data["_estado"].tolist()
 
@@ -884,26 +883,24 @@ def vista_dashboard(df, locations):
             "#FF3B30" if e == "REPROGRAMAR" else "#4488FF"
             for e in estados
         ]
-        # Truncar nombres: prioridad al nombre sobre el largo de la barra
-        y_vals = [v[:30] + "..." if len(str(v)) > 30 else v for v in y_vals]
-        max_x  = max(x_vals) if x_vals else 1
+        max_x = max(x_vals) if x_vals else 1
         fig_top = go.Figure(go.Bar(
             x=x_vals, y=y_vals, orientation="h",
             marker=dict(color=colores_top),
             text=[str(int(v)) + " u" for v in x_vals],
-            textposition="inside",
-            textfont=dict(size=11, color="#F5F0E8"),
-            insidetextanchor="end",
+            textposition="outside",
+            textfont=dict(size=11, color="#1A1A14"),
         ))
         fig_top.update_layout(
             paper_bgcolor="#EDEAE0",
             plot_bgcolor="#EDEAE0",
             font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=10, b=10, l=310, r=20),
+            margin=dict(t=10, b=10, l=340, r=80),
             height=max(380, n_top * 38),
-            xaxis=dict(showgrid=False, gridcolor="#D4CFC4", zeroline=False,
-                       showticklabels=False, range=[0, max_x * 1.05]),
-            yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14"),
+            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
+                       showticklabels=False, range=[0, max_x * 1.35]),
+            yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"),
+                       tickcolor="#1A1A14"),
         )
         st.plotly_chart(fig_top, use_container_width=True, config={"displayModeBar": False})
 
