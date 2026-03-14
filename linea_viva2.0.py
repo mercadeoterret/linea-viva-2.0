@@ -96,6 +96,9 @@ section[data-testid="stSidebar"] .stButton > button:hover {
     font-size: 13px !important;
 }
 hr { border-color: #D4CFC4 !important; }
+[data-testid="stDataFrame"] { background: #EDEAE0 !important; }
+[data-testid="stDataFrame"] iframe { background: #EDEAE0 !important; }
+.stDataFrame { background: #EDEAE0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -694,7 +697,7 @@ def vista_dashboard(df, locations):
                 x=criticos["dias_min"], y=criticos["Producto"], orientation="h",
                 marker=dict(color=criticos["dias_min"],
                             colorscale=[[0, "#FF3B30"], [1, "#FFB800"]], showscale=False),
-                text=criticos["dias_min"].apply(lambda x: f"{int(x)}d"),
+                text=criticos["dias_min"].apply(lambda x: "QUIEBRE" if x == 0 else f"{int(x)}d"),
                 textposition="outside", textfont=dict(size=10),
                 hovertemplate="<b>%{y}</b><br>%{x:.0f} días<extra></extra>",
             ))
@@ -702,7 +705,7 @@ def vista_dashboard(df, locations):
                 **PLOT_BASE, height=310,
                 margin=dict(t=10, b=10, l=180, r=60),
                 xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False,
-                           range=[0, max(criticos["dias_min"].max() * 1.35, 35)]),
+                           range=[0, max(criticos["dias_min"].max() * 1.35, 35) if criticos["dias_min"].max() > 0 else 35]),
                 yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
                 shapes=[dict(type="line", x0=LEAD_TIME_DIAS, x1=LEAD_TIME_DIAS,
                              y0=-0.5, y1=len(criticos) - 0.5,
@@ -768,11 +771,13 @@ def vista_dashboard(df, locations):
             unsafe_allow_html=True,
         )
         por_tipo = (
-            df_view.groupby("Tipo")
+            df_view[df_view["Tipo"].str.strip() != ""]
+            .groupby("Tipo")
             .agg(stock=("Stock", "sum"), valor_costo=("_valor_costo", "sum"))
             .reset_index()
             .sort_values("stock", ascending=True)
         )
+        por_tipo = por_tipo[por_tipo["stock"] > 0]
         x_cat   = por_tipo["valor_costo"] if tiene_costos else por_tipo["stock"]
         txt_cat = [fmt_pesos(v) for v in x_cat] if tiene_costos else [f"{int(v)} u" for v in x_cat]
 
@@ -798,11 +803,13 @@ def vista_dashboard(df, locations):
             unsafe_allow_html=True,
         )
         pv = (
-            df_view.groupby("Tipo")
+            df_view[df_view["Tipo"].str.strip() != ""]
+            .groupby("Tipo")
             .agg(vc=("_valor_costo", "sum"), vv=("_valor_venta", "sum"))
             .reset_index()
             .sort_values("vv", ascending=True)
         )
+        pv = pv[(pv["vc"] > 0) | (pv["vv"] > 0)]
         cats = pv["Tipo"].tolist()
         fig_val = go.Figure()
         fig_val.add_trace(go.Bar(
@@ -841,7 +848,7 @@ def vista_dashboard(df, locations):
     resumen = []
     for estado in ORDEN_SIDEBAR:
         cfg = ESTADOS[estado]
-        sub = df_view[df_view["_estado"] == estado]
+        sub = df_view[(df_view["_estado"] == estado) & (df_view["Stock"] > 0)]
         if sub.empty:
             continue
         row = {
@@ -1124,7 +1131,7 @@ def vista_rotacion(df):
         "letter-spacing:3px;color:#1A1A14;margin-bottom:4px;'>ROTACIÓN DE INVENTARIO</div>"
         "<div style='font-size:11px;color:#6B6456;letter-spacing:1px;"
         "text-transform:uppercase;margin-bottom:20px;'>"
-        "Convierte capital inmovilizado en reposición de best sellers</div>",
+        "Convierte capital inmovilizado en stock de lo que sí vende</div>",
         unsafe_allow_html=True,
     )
     if df.empty:
@@ -1132,54 +1139,78 @@ def vista_rotacion(df):
         return
 
     liq = df[df["_estado"] == "LIQUIDAR"].copy()
-    rep = df[df["_estado"].isin(["REPROGRAMAR", "ESTRELLA"])].copy()
+    rep = df[df["_estado"].isin(["REPROGRAMAR", "ESTRELLA", "ALTA_ROTACION"])].copy()
 
+    # ── PASO 1: Capital disponible en liquidación ──────────────────────────────
     st.markdown(
-        "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-        "letter-spacing:2px;color:#6B6456;margin-bottom:6px;'>PRODUCTOS A LIQUIDAR</div>",
+        "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+        "letter-spacing:2px;color:#FF9500;margin-bottom:8px;'>PASO 1 — CAPITAL INMOVILIZADO (LIQUIDAR)</div>",
         unsafe_allow_html=True,
     )
+
     desc_pct = st.slider("Descuento de liquidación (%)", 10, 60, 30, 5, key="desc_liq")
     factor   = 1 - desc_pct / 100
 
     capital_total = 0.0
+    liq_ag = pd.DataFrame()
+
     if liq.empty:
-        st.info("Sin productos en estado LIQUIDAR actualmente.")
+        st.info("No hay productos en LIQUIDAR actualmente.")
     else:
         liq_ag = liq.groupby("Producto").agg(
             stock=("Stock", "sum"),
             precio=("Precio Venta", "mean"),
             costo=("Costo", "mean"),
+            ventas=("Ventas60d", "sum"),
         ).reset_index()
-        liq_ag["valor_costo"]      = liq_ag["stock"] * liq_ag["costo"]
-        liq_ag["precio_liq"]       = liq_ag["precio"] * factor
-        liq_ag["valor_liquidacion"] = liq_ag["stock"] * liq_ag["precio_liq"]
-        capital_total = liq_ag["valor_liquidacion"].sum()
+        liq_ag = liq_ag[liq_ag["stock"] > 0].copy()
+        liq_ag["precio_liq"]        = liq_ag["precio"] * factor
+        liq_ag["valor_costo"]       = liq_ag["stock"] * liq_ag["costo"]
+        liq_ag["capital_liq"]       = liq_ag["stock"] * liq_ag["precio_liq"]
+        capital_total = liq_ag["capital_liq"].sum()
 
-        liq_ag["Precio liq."] = liq_ag["precio_liq"].apply(fmt_pesos)
-        liq_ag["Valor costo"] = liq_ag["valor_costo"].apply(fmt_pesos)
-        liq_ag["Capital est."] = liq_ag["valor_liquidacion"].apply(fmt_pesos)
-        st.dataframe(
-            liq_ag[["Producto", "stock", "Precio liq.", "Valor costo", "Capital est."]].rename(
-                columns={"stock": "Stock"}),
-            use_container_width=True, hide_index=True,
+        # Gráfico de barras — capital por producto
+        liq_plot = liq_ag.sort_values("capital_liq", ascending=True).tail(15)
+        fig_liq = go.Figure(go.Bar(
+            x=liq_plot["capital_liq"],
+            y=liq_plot["Producto"].str[:35],
+            orientation="h",
+            marker=dict(color="#FF9500", opacity=0.85),
+            text=[fmt_pesos(v) for v in liq_plot["capital_liq"]],
+            textposition="outside",
+            textfont=dict(size=9),
+            hovertemplate="<b>%{y}</b><br>%{text}<br>%{x:.0f} u<extra></extra>",
+        ))
+        fig_liq.update_layout(
+            **PLOT_BASE, height=max(240, len(liq_plot) * 30),
+            margin=dict(t=10, b=10, l=220, r=90),
+            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
         )
-        st.metric("💰 Capital disponible (est.)", fmt_pesos(capital_total))
+        st.plotly_chart(fig_liq, use_container_width=True, config={"displayModeBar": False})
 
-    st.markdown("<hr style='border-color:#D4CFC4;margin:20px 0;'>", unsafe_allow_html=True)
+        c1, c2, c3 = st.columns(3)
+        with c1: st.metric("Productos a liquidar", len(liq_ag))
+        with c2: st.metric("Unidades totales",     int(liq_ag["stock"].sum()))
+        with c3: st.metric(f"Capital estimado ({desc_pct}% desc.)", fmt_pesos(capital_total))
+
+    st.markdown("<hr style='border-color:#D4CFC4;margin:24px 0;'>", unsafe_allow_html=True)
+
+    # ── PASO 2: Calculadora de reposición ─────────────────────────────────────
     st.markdown(
-        "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-        "letter-spacing:2px;color:#6B6456;margin-bottom:6px;'>CALCULADORA DE REPOSICIÓN</div>",
+        "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+        "letter-spacing:2px;color:#2D6A4F;margin-bottom:8px;'>PASO 2 — ¿QUÉ REPONGO CON ESE CAPITAL?</div>",
         unsafe_allow_html=True,
     )
 
     presupuesto = st.number_input(
         "Presupuesto disponible ($COP)",
         min_value=0, value=int(capital_total), step=100_000, key="presupuesto_rot",
+        help="Puedes ajustar este valor. Por defecto es el capital estimado de liquidación.",
     )
 
     if rep.empty:
-        st.info("Sin productos en REPROGRAMAR o ESTRELLA.")
+        st.info("No hay productos en REPROGRAMAR, ESTRELLA o ALTA_ROTACION.")
         return
 
     rep_ag = rep.groupby("Producto").agg(
@@ -1187,38 +1218,84 @@ def vista_rotacion(df):
         ventas=("Ventas60d", "sum"),
         stock=("Stock", "sum"),
         dias=("DiasInv_n", "min"),
+        estado=("_estado", "first"),
     ).reset_index()
     rep_ag = rep_ag[rep_ag["costo"] > 0].sort_values("ventas", ascending=False)
-    rep_ag["sug_unids"]  = rep_ag.apply(
-        lambda r: sugerir_cantidad(r["stock"], r["ventas"], r["dias"], "REPROGRAMAR")[0], axis=1
-    )
 
+    rep_ag["sug_unids"] = rep_ag.apply(
+        lambda r: sugerir_cantidad(r["stock"], r["ventas"], r["dias"], r["estado"])[0], axis=1
+    )
+    rep_ag["costo_sug"] = rep_ag["sug_unids"] * rep_ag["costo"]
+
+    # Asignar presupuesto en orden de prioridad (mayor ventas primero)
     presupuesto_rest = float(presupuesto)
     rep_ag["unids_posibles"] = 0
     rep_ag["costo_real"]     = 0.0
 
     for idx, row in rep_ag.iterrows():
-        if presupuesto_rest <= 0 or row["costo"] <= 0:
+        if presupuesto_rest <= 0 or row["costo"] <= 0 or row["sug_unids"] == 0:
             continue
         max_u = int(presupuesto_rest / row["costo"])
         unids = min(max_u, row["sug_unids"])
         unids = (unids // MULTIPLO) * MULTIPLO
+        if unids < MULTIPLO:
+            continue
         rep_ag.at[idx, "unids_posibles"] = unids
         rep_ag.at[idx, "costo_real"]     = unids * row["costo"]
         presupuesto_rest -= unids * row["costo"]
 
-    rep_ag["Costo unit."]    = rep_ag["costo"].apply(fmt_pesos)
-    rep_ag["Sugerido (u)"]   = rep_ag["sug_unids"].astype(int)
-    rep_ag["Posibles (u)"]   = rep_ag["unids_posibles"].astype(int)
-    rep_ag["Costo posibles"] = rep_ag["costo_real"].apply(fmt_pesos)
-    st.dataframe(
-        rep_ag[["Producto", "Costo unit.", "Sugerido (u)", "Posibles (u)", "Costo posibles"]],
-        use_container_width=True, hide_index=True,
-    )
-    c1, c2, c3 = st.columns(3)
-    with c1: st.metric("Total a invertir",     fmt_pesos(rep_ag["costo_real"].sum()))
-    with c2: st.metric("Presupuesto restante", fmt_pesos(float(presupuesto) - rep_ag["costo_real"].sum()))
-    with c3: st.metric("Unidades a reponer",   int(rep_ag["unids_posibles"].sum()))
+    rep_con = rep_ag[rep_ag["unids_posibles"] > 0].copy()
+    rep_sin = rep_ag[rep_ag["unids_posibles"] == 0].copy()
+
+    # Gráfico: sugerido vs posible
+    if not rep_con.empty:
+        rep_plot = rep_con.sort_values("costo_real", ascending=True)
+        fig_rep = go.Figure()
+        fig_rep.add_trace(go.Bar(
+            name="Posible reponer",
+            x=rep_plot["costo_real"],
+            y=rep_plot["Producto"].str[:35],
+            orientation="h",
+            marker=dict(color="#2D6A4F", opacity=0.9),
+            text=[f"{int(r.unids_posibles)} u · {fmt_pesos(r.costo_real)}" for _, r in rep_plot.iterrows()],
+            textposition="outside",
+            textfont=dict(size=9),
+            hovertemplate="<b>%{y}</b><br>%{text}<extra></extra>",
+        ))
+        fig_rep.add_trace(go.Bar(
+            name="Sugerido total",
+            x=rep_plot["costo_sug"],
+            y=rep_plot["Producto"].str[:35],
+            orientation="h",
+            marker=dict(color="#D4CFC4", opacity=0.5),
+            hovertemplate="<b>%{y}</b><br>Sugerido: $%{x:,.0f}<extra></extra>",
+        ))
+        fig_rep.update_layout(
+            barmode="overlay",
+            **PLOT_BASE,
+            height=max(280, len(rep_plot) * 32),
+            margin=dict(t=30, b=10, l=220, r=120),
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0, font=dict(size=10)),
+            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+        )
+        st.plotly_chart(fig_rep, use_container_width=True, config={"displayModeBar": False})
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.metric("Productos a reponer",  len(rep_con))
+    with c2: st.metric("Unidades totales",     int(rep_ag["unids_posibles"].sum()))
+    with c3: st.metric("Capital a invertir",   fmt_pesos(rep_ag["costo_real"].sum()))
+    with c4: st.metric("Presupuesto restante", fmt_pesos(presupuesto_rest))
+
+    if not rep_sin.empty:
+        st.markdown(
+            f"<div style='font-size:11px;color:#B8B0A4;margin-top:8px;'>"
+            f"{len(rep_sin)} productos necesitan reposición pero el presupuesto no alcanza: "
+            + ", ".join(rep_sin["Producto"].str[:25].tolist()[:5])
+            + ("..." if len(rep_sin) > 5 else "") +
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # ─── MÓDULO 4: TENDENCIAS ─────────────────────────────────────────────────────
@@ -1238,69 +1315,135 @@ def vista_tendencias(token):
         return
 
     df_t["fecha"] = pd.to_datetime(df_t["fecha"])
-    corte = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    hoy   = pd.Timestamp.now()
+    corte = hoy - timedelta(days=30)
+    inicio = hoy - timedelta(days=90)
 
     rec = df_t[df_t["fecha"] >= corte].groupby("producto")["cantidad"].sum()
-    ant = df_t[df_t["fecha"] <  corte].groupby("producto")["cantidad"].sum()
+    ant = df_t[(df_t["fecha"] >= inicio) & (df_t["fecha"] < corte)].groupby("producto")["cantidad"].sum()
 
     comp = pd.DataFrame({"reciente": rec, "anterior": ant}).fillna(0)
+
+    # Solo productos que vendieron en AMBOS períodos — eliminar ruido
+    comp = comp[(comp["reciente"] >= 3) & (comp["anterior"] >= 3)].copy()
+
     comp["delta"] = comp["reciente"] - comp["anterior"]
-    comp["pct"]   = comp.apply(
-        lambda r: (r["delta"] / r["anterior"] * 100) if r["anterior"] > 0 else 100.0, axis=1
-    )
-    comp = comp.sort_values("pct", ascending=False).reset_index()
-    comp.columns = ["Producto", "Últimos 30d", "30d anteriores", "Δ u", "Δ %"]
+    comp["pct"]   = (comp["delta"] / comp["anterior"] * 100).round(0)
+    comp = comp.reset_index()
+    comp.columns = ["Producto", "Últimos 30d", "30d ant.", "Δ u", "Δ %"]
+    comp = comp.sort_values("Δ %", ascending=False)
+
+    # ── Gráfico principal: acelerando vs desacelerando ────────────────────────
+    top_crec = comp[comp["Δ %"] > 0].head(10)
+    top_dec  = comp[comp["Δ %"] < 0].tail(10).sort_values("Δ %")
 
     col_l, col_r = st.columns(2)
+
     with col_l:
         st.markdown(
             "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#2D6A4F;margin-bottom:6px;'>📈 CRECIENDO</div>",
+            "letter-spacing:2px;color:#2D6A4F;margin-bottom:6px;'>ACELERANDO</div>",
             unsafe_allow_html=True,
         )
-        cr = comp[comp["Δ %"] > 0].head(10).copy()
-        cr["Δ %"] = cr["Δ %"].apply(lambda x: f"+{x:.0f}%")
-        st.dataframe(cr[["Producto", "Últimos 30d", "Δ %"]], use_container_width=True, hide_index=True)
+        if top_crec.empty:
+            st.info("Sin productos con tendencia creciente significativa.")
+        else:
+            fig_crec = go.Figure(go.Bar(
+                x=top_crec["Δ u"],
+                y=top_crec["Producto"].str[:30],
+                orientation="h",
+                marker=dict(color="#2D6A4F", opacity=0.85),
+                text=[f"+{int(r['Últimos 30d'])} u ({r['Δ %']:+.0f}%)" for _, r in top_crec.iterrows()],
+                textposition="outside",
+                textfont=dict(size=9),
+                hovertemplate="<b>%{y}</b><br>+%{x} u vs período anterior<extra></extra>",
+            ))
+            fig_crec.update_layout(
+                **PLOT_BASE, height=max(260, len(top_crec) * 32),
+                margin=dict(t=10, b=10, l=200, r=140),
+                xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
+                yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+            )
+            st.plotly_chart(fig_crec, use_container_width=True, config={"displayModeBar": False})
 
     with col_r:
         st.markdown(
             "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#FF3B30;margin-bottom:6px;'>📉 DECAYENDO</div>",
+            "letter-spacing:2px;color:#FF3B30;margin-bottom:6px;'>DESACELERANDO</div>",
             unsafe_allow_html=True,
         )
-        dc = comp[comp["Δ %"] < 0].tail(10).sort_values("Δ %").copy()
-        dc["Δ %"] = dc["Δ %"].apply(lambda x: f"{x:.0f}%")
-        st.dataframe(dc[["Producto", "Últimos 30d", "Δ %"]], use_container_width=True, hide_index=True)
+        if top_dec.empty:
+            st.info("Sin productos con tendencia decreciente significativa.")
+        else:
+            fig_dec = go.Figure(go.Bar(
+                x=top_dec["Δ u"].abs(),
+                y=top_dec["Producto"].str[:30],
+                orientation="h",
+                marker=dict(color="#FF3B30", opacity=0.75),
+                text=[f"{int(r['Últimos 30d'])} u ({r['Δ %']:+.0f}%)" for _, r in top_dec.iterrows()],
+                textposition="outside",
+                textfont=dict(size=9),
+                hovertemplate="<b>%{y}</b><br>%{x} u menos vs período anterior<extra></extra>",
+            ))
+            fig_dec.update_layout(
+                **PLOT_BASE, height=max(260, len(top_dec) * 32),
+                margin=dict(t=10, b=10, l=200, r=140),
+                xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
+                yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+            )
+            st.plotly_chart(fig_dec, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown(
-        "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-        "letter-spacing:2px;color:#6B6456;margin:16px 0 6px 0;'>EVOLUCIÓN SEMANAL</div>",
+        "<div style='font-size:10px;color:#B8B0A4;margin-bottom:20px;'>"
+        "Solo se muestran productos con ≥ 3 unidades vendidas en ambos períodos para eliminar ruido estadístico."
+        "</div>",
         unsafe_allow_html=True,
     )
+
+    # ── Evolución semanal ─────────────────────────────────────────────────────
+    st.markdown(
+        "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
+        "letter-spacing:2px;color:#6B6456;margin:16px 0 6px 0;'>EVOLUCIÓN SEMANAL — DRILL DOWN</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Por defecto mostrar los top 5 más vendidos en los últimos 30d
+    top5 = df_t[df_t["fecha"] >= corte].groupby("producto")["cantidad"].sum().nlargest(5).index.tolist()
     prods_disp = sorted(df_t["producto"].unique().tolist())
-    sel_prods  = st.multiselect("Seleccionar productos", prods_disp, default=prods_disp[:3])
+    sel_prods  = st.multiselect("Seleccionar productos", prods_disp, default=top5[:3], key="sel_tend")
 
     if sel_prods:
         df_sel = df_t[df_t["producto"].isin(sel_prods)].copy()
         df_sel["semana"] = df_sel["fecha"].dt.to_period("W").dt.start_time
         evol   = df_sel.groupby(["semana", "producto"])["cantidad"].sum().reset_index()
         colores = ["#2D6A4F", "#FF3B30", "#FFB800", "#4488FF", "#FF6B35"]
-        fig_ev  = go.Figure()
+
+        fig_ev = go.Figure()
         for i, prod in enumerate(sel_prods):
             sub_p = evol[evol["producto"] == prod]
+            if sub_p.empty:
+                continue
             fig_ev.add_trace(go.Scatter(
                 x=sub_p["semana"], y=sub_p["cantidad"],
                 mode="lines+markers", name=prod,
                 line=dict(color=colores[i % len(colores)], width=2),
-                marker=dict(size=5),
-                hovertemplate="<b>%{fullData.name}</b><br>%{x|%d/%m}<br>%{y} u<extra></extra>",
+                marker=dict(size=6),
+                hovertemplate="<b>%{fullData.name}</b><br>Semana %{x|%d %b}<br>%{y} u<extra></extra>",
             ))
+
+        # Línea vertical en el corte 30d
+        fig_ev.add_vline(
+            x=corte.timestamp() * 1000,
+            line=dict(color="#B8B0A4", width=1, dash="dot"),
+            annotation_text="hace 30d",
+            annotation_font_size=9,
+        )
         fig_ev.update_layout(
-            **PLOT_BASE, height=300,
-            margin=dict(t=10, b=30, l=50, r=20),
-            legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0, font=dict(size=10)),
-            xaxis=dict(showgrid=False, tickformat="%d/%m"),
-            yaxis=dict(showgrid=True, gridcolor="#D4CFC4", tickfont=dict(size=9)),
+            **PLOT_BASE, height=320,
+            margin=dict(t=20, b=30, l=50, r=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
+            xaxis=dict(showgrid=False, tickformat="%d %b"),
+            yaxis=dict(showgrid=True, gridcolor="#D4CFC4", tickfont=dict(size=9), title="Unidades"),
         )
         st.plotly_chart(fig_ev, use_container_width=True, config={"displayModeBar": False})
 
