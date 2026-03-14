@@ -709,34 +709,30 @@ def vista_dashboard(df, locations):
                 unsafe_allow_html=True,
             )
         else:
-            # Texto: quiebre si stock=0, días si tiene algo de stock
-            def label_crit(row):
+            def estado_crit(row):
                 if row["stock"] == 0:
-                    return f"QUIEBRE · {int(row['ventas'])} u/60d"
-                return f"{int(row['dias_min'])}d · {int(row['ventas'])} u/60d"
+                    return "⚡ QUIEBRE"
+                return f"{int(row['dias_min'])}d"
 
-            criticos["prod_label"] = criticos["Producto"].str[:30]
-            fig_crit = go.Figure(go.Bar(
-                x=criticos["ventas"],
-                y=criticos["prod_label"],
-                orientation="h",
-                marker=dict(
-                    color=criticos["stock"].apply(lambda s: "#FF3B30" if s == 0 else "#FFB800"),
-                    opacity=0.85,
-                ),
-                text=criticos.apply(label_crit, axis=1),
-                textposition="outside",
-                textfont=dict(size=9),
-                hovertemplate="<b>%{y}</b><br>%{x} u vendidas 60d<extra></extra>",
-            ))
-            fig_crit.update_layout(
-                **PLOT_BASE, height=340,
-                margin=dict(t=10, b=10, l=220, r=180),
-                xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
-                           showticklabels=False),
-                yaxis=dict(showgrid=False, tickfont=dict(size=10)),
-            )
-            st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
+            for _, row in criticos.sort_values("ventas", ascending=False).iterrows():
+                es_quiebre = row["stock"] == 0
+                color_barra = "#FF3B30" if es_quiebre else "#FFB800"
+                pct = int(row["ventas"] / criticos["ventas"].max() * 100) if criticos["ventas"].max() > 0 else 0
+                estado_txt = "⚡ QUIEBRE" if es_quiebre else f"{int(row['dias_min'])}d"
+                st.markdown(
+                    f"<div style='display:grid;grid-template-columns:180px 1fr 60px 70px;"
+                    f"gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid #D4CFC4;'>"
+                    f"<div style='font-size:11px;color:#1A1A14;font-weight:500;"
+                    f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' title='{row["Producto"]}'>"
+                    f"{row['Producto'][:26] + '...' if len(row['Producto']) > 26 else row['Producto']}</div>"
+                    f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+                    f"<div style='background:{color_barra};width:{pct}%;height:14px;border-radius:3px;'></div>"
+                    f"</div>"
+                    f"<div style='font-family:DM Mono,monospace;font-size:11px;color:{color_barra};font-weight:500;'>{estado_txt}</div>"
+                    f"<div style='font-family:DM Mono,monospace;font-size:11px;color:#6B6456;text-align:right;'>{int(row['ventas'])} u</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
     # Top ventas + Por categoría
     col_l2, col_r2 = st.columns(2)
@@ -771,20 +767,22 @@ def vista_dashboard(df, locations):
             x_v = top_data["Ventas60d"].tolist()
             c_v = [color_estado(e) for e in top_data["_estado"]]
 
-        fig_top = go.Figure(go.Bar(
-            x=x_v, y=y_v, orientation="h",
-            marker=dict(color=c_v),
-            text=[f"{int(v)} u" for v in x_v], textposition="outside",
-            textfont=dict(size=10),
-            hovertemplate="<b>%{y}</b><br>%{x} u<extra></extra>",
-        ))
-        fig_top.update_layout(
-            **PLOT_BASE, height=max(320, n_top * 32),
-            margin=dict(t=10, b=10, l=10, r=70),
-            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=11), automargin=True),
-        )
-        st.plotly_chart(fig_top, use_container_width=True, config={"displayModeBar": False})
+        max_v = max(x_v) if x_v else 1
+        for label, val, col in zip(y_v, x_v, c_v):
+            pct = int(val / max_v * 100)
+            st.markdown(
+                f"<div style='display:grid;grid-template-columns:200px 1fr 55px;"
+                f"gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid #D4CFC4;'>"
+                f"<div style='font-size:11px;color:#1A1A14;font-weight:500;"
+                f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
+                f"{label[:30] + '...' if len(str(label)) > 30 else label}</div>"
+                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+                f"<div style='background:{col};width:{pct}%;height:14px;border-radius:3px;opacity:0.85;'></div>"
+                f"</div>"
+                f"<div style='font-family:DM Mono,monospace;font-size:11px;color:#6B6456;text-align:right;'>{int(val)} u</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
     with col_r2:
         st.markdown(
