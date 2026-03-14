@@ -414,20 +414,29 @@ def cargar_productos(_token):
 
 
 @st.cache_data(ttl=300)
-def cargar_stock(_token, _locations):
-    loc_ids   = [str(loc["id"]) for loc in _locations]
+def cargar_stock(_token, _productos):
+    """Consulta inventory_levels por lotes de 50 inventory_item_ids."""
+    all_iids = list({
+        var["inventory_item_id"]
+        for prod in _productos
+        for var in prod["variants"]
+        if var["inventory_item_id"]
+    })
     stock_map = {}
-    for loc_id in loc_ids:
+    batch_size = 50
+    for i in range(0, len(all_iids), batch_size):
+        batch = all_iids[i:i + batch_size]
         niveles = rest_paginated(
             _token, "inventory_levels.json", "inventory_levels",
-            {"location_id": loc_id, "limit": 250},
+            {"inventory_item_ids": ",".join(batch), "limit": 250},
         )
         for n in niveles:
             iid = str(n["inventory_item_id"])
+            lid = str(n["location_id"])
             qty = max(0, int(n.get("available", 0) or 0))
             if iid not in stock_map:
                 stock_map[iid] = {}
-            stock_map[iid][str(loc_id)] = qty
+            stock_map[iid][lid] = qty
     return stock_map
 
 
@@ -1307,7 +1316,7 @@ def main():
         try:
             locations  = cargar_locations(token)
             productos  = cargar_productos(token)
-            stock_map  = cargar_stock(token, locations)
+            stock_map  = cargar_stock(token, productos)
             ventas_map = cargar_ventas_60d(token)
             df         = construir_df(productos, stock_map, ventas_map, locations)
         except requests.exceptions.HTTPError as e:
