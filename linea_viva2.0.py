@@ -836,22 +836,21 @@ def vista_dashboard(df, locations):
             )
             st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
 
-    # ── FILA 2: Top Ventas + Stock por Categoria ──────────────────────────────
-    col_l2, col_r2 = st.columns(2)
+    # ── FILA 2: Top Ventas (ancho completo) ──────────────────────────────────
+    tc1, tc2, tc3 = st.columns([6, 1, 1])
+    with tc1:
+        st.markdown(
+            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>TOP VENTAS 60D</div>",
+            unsafe_allow_html=True,
+        )
+    with tc2:
+        n_top = st.select_slider("", options=[10, 15, 20, 30, 50], value=10,
+                                 key="slider_top_ventas", label_visibility="collapsed")
+    with tc3:
+        vista_sku = st.toggle("Por SKU", key="toggle_top_sku", value=False)
 
-    with col_l2:
-        tc1, tc2, tc3 = st.columns([3, 1, 1])
-        with tc1:
-            st.markdown(
-                "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
-                "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>TOP VENTAS 60D</div>",
-                unsafe_allow_html=True,
-            )
-        with tc2:
-            n_top = st.select_slider("", options=[10, 15, 20, 30, 50], value=10,
-                                     key="slider_top_ventas", label_visibility="collapsed")
-        with tc3:
-            vista_sku = st.toggle("Por SKU", key="toggle_top_sku", value=False)
+    if True:  # bloque unico para mantener indentacion
 
         if vista_sku:
             top_data = df_view[["Producto","Variante","SKU","Ventas60d","_estado"]].copy()
@@ -910,44 +909,40 @@ def vista_dashboard(df, locations):
             unsafe_allow_html=True,
         )
 
-    with col_r2:
-        st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
-            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>STOCK POR CATEGORIA</div>",
-            unsafe_allow_html=True,
+    # ── FILA 3: Stock por Categoria (ancho completo) ─────────────────────────
+    st.markdown(
+        "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+        "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>STOCK POR CATEGORIA</div>",
+        unsafe_allow_html=True,
+    )
+    por_tipo = (
+        df_view[df_view["Tipo"].str.strip() != ""]
+        .groupby("Tipo")
+        .agg(stock=("Stock","sum"), valor_costo=("_valor_costo","sum"), valor_venta=("_valor_venta","sum"))
+        .reset_index()
+        .sort_values("stock", ascending=True)
+    )
+    por_tipo = por_tipo[por_tipo["stock"] > 0]
+    x_cat   = por_tipo["valor_costo"] if tiene_costos else por_tipo["stock"]
+    txt_cat = ["$" + f"{v:,.0f}" for v in x_cat] if tiene_costos else [str(int(v)) + " u" for v in x_cat]
+    max_cat = x_cat.max() if len(x_cat) > 0 else 1
+    cat_rows = ""
+    for tipo, val, txt in zip(por_tipo["Tipo"].tolist()[::-1], x_cat.tolist()[::-1], txt_cat[::-1]):
+        pct = int(val / max_cat * 100)
+        cat_rows += (
+            f"<div style='display:grid;grid-template-columns:200px 1fr 110px;"
+            f"gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #D4CFC4;'>"
+            f"<div style='font-size:12px;color:#1A1A14;font-weight:500;"
+            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+            f"font-family:DM Sans,sans-serif;'>{str(tipo)}</div>"
+            f"<div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
+            f"<div style='background:#4488FF;width:{pct}%;height:16px;border-radius:3px;opacity:0.85;'></div>"
+            f"</div>"
+            f"<div style='font-family:DM Mono,monospace;font-size:11px;"
+            f"color:#1A1A14;text-align:right;'>{txt}</div>"
+            f"</div>"
         )
-        por_tipo = (
-            df_view[df_view["Tipo"].str.strip() != ""]
-            .groupby("Tipo")
-            .agg(stock=("Stock","sum"), valor_costo=("_valor_costo","sum"), valor_venta=("_valor_venta","sum"))
-            .reset_index()
-            .sort_values("stock", ascending=True)
-        )
-        por_tipo = por_tipo[por_tipo["stock"] > 0]
-
-        x_cat  = por_tipo["valor_costo"] if tiene_costos else por_tipo["stock"]
-        txt_cat = ["$" + f"{v:,.0f}" for v in x_cat] if tiene_costos else [str(int(v)) + " u" for v in x_cat]
-
-        fig_cat = go.Figure(go.Bar(
-            x=x_cat,
-            y=por_tipo["Tipo"].str[:18],
-            orientation="h",
-            marker=dict(color="#4488FF", opacity=0.8),
-            text=txt_cat,
-            textposition="outside",
-            textfont=dict(size=9, color="#1A1A14"),
-            hovertemplate="<b>%{y}</b><br>%{text}<extra></extra>",
-        ))
-        fig_cat.update_layout(
-            paper_bgcolor="#EDEAE0",
-            plot_bgcolor="#EDEAE0",
-            font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=10, b=10, l=170, r=100),
-            height=max(320, len(por_tipo) * 28),
-            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14"),
-        )
-        st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+    st.markdown(f"<div style='padding:8px 0;'>{cat_rows}</div>", unsafe_allow_html=True)
 
     # ── FILA 3: Valor de Inventario por Categoria ─────────────────────────────
     if tiene_costos or tiene_precios:
