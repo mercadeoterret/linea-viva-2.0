@@ -290,120 +290,98 @@ def shopify_get_token():
 # ─── GOOGLE AUTH ──────────────────────────────────────────────────────────────
 
 def check_google_login():
-    """
-    Google OAuth con validación de dominio.
-    Solo permite @terretsports.com y @terret.co.
-    Shopify usa state=lv7 — no interfiere con este flujo.
-    """
     if st.session_state.get("logged_in"):
         return
 
-    # Callback de Shopify — no interrumpir con login de Google
+    # Si viene callback de Shopify, dejar pasar sin pedir login
     if st.query_params.get("state", "") == "lv7":
         return
 
     client_id     = st.secrets.get("GOOGLE_CLIENT_ID", "")
     client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", "")
-    redirect_uri  = st.secrets.get("REDIRECT_URI", "")
-    allowed_domains = [d.strip().lower() for d in
-                       st.secrets.get("ALLOWED_DOMAINS", "terretsports.com,terret.co").split(",")]
+    redirect_uri  = st.secrets.get("REDIRECT_URI", "https://linea-viva-20-bdm63phvwl6idtuxaqvkqp.streamlit.app/")
 
-    code  = st.query_params.get("code", "")
-    state = st.query_params.get("state", "")
+    query_params = st.query_params
+    auth_code = query_params.get("code")
 
-    # ── Procesar callback de Google ───────────────────────────────────────────
-    if code and state == "google":
-        with st.spinner("Verificando cuenta..."):
-            try:
-                token_resp = requests.post(
-                    "https://oauth2.googleapis.com/token",
-                    data={
-                        "code":          code,
-                        "client_id":     client_id,
-                        "client_secret": client_secret,
-                        "redirect_uri":  redirect_uri,
-                        "grant_type":    "authorization_code",
-                    },
-                    timeout=15,
-                )
-                if token_resp.status_code != 200:
-                    raise ValueError(f"Token error: {token_resp.text}")
+    if not auth_code:
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
+        params = {
+            "client_id":     client_id,
+            "redirect_uri":  redirect_uri,
+            "response_type": "code",
+            "scope":         "openid email profile",
+            "access_type":   "offline",
+            "prompt":        "select_account",
+        }
+        login_url = f"{auth_url}?{urllib.parse.urlencode(params)}"
 
-                access_token = token_resp.json().get("access_token", "")
-                user_info = requests.get(
-                    "https://www.googleapis.com/oauth2/v2/userinfo",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=10,
-                ).json()
-
-                email  = user_info.get("email", "").lower()
-                domain = email.split("@")[-1] if "@" in email else ""
-
-                if domain not in allowed_domains:
-                    st.query_params.clear()
-                    _pantalla_login(client_id, redirect_uri,
-                                   error=f"Acceso denegado: {email}. Solo cuentas @terretsports.com y @terret.co.")
-                    st.stop()
-
-                st.session_state.logged_in  = True
-                st.session_state.user_email = email
-                st.session_state.user_name  = user_info.get("name", email.split("@")[0])
-                st.query_params.clear()
-                st.rerun()
-
-            except Exception as e:
-                st.query_params.clear()
-                _pantalla_login(client_id, redirect_uri,
-                               error=f"Error de autenticación. Intenta de nuevo.")
-                st.stop()
-
-    # ── Mostrar pantalla de login ─────────────────────────────────────────────
-    _pantalla_login(client_id, redirect_uri)
-    st.stop()
-
-
-def _pantalla_login(client_id, redirect_uri, error=None):
-    """Renderiza la pantalla de login con Google."""
-    login_url = (
-        "https://accounts.google.com/o/oauth2/v2/auth"
-        f"?client_id={client_id}"
-        "&response_type=code"
-        "&scope=openid%20email%20profile"
-        f"&redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
-        "&access_type=online"
-        "&prompt=select_account"
-        "&state=google"
-        "&hd=terretsports.com"  # hint: solo muestra cuentas de este dominio primero
-    )
-
-    st.markdown(
-        "<div style='max-width:380px;margin:80px auto;text-align:center;'>"
-        "<div style='background:#2D6A4F;width:56px;height:56px;border-radius:10px;"
-        "display:inline-flex;align-items:center;justify-content:center;"
-        "font-family:Bebas Neue,sans-serif;font-size:26px;color:#F5F0E8;"
-        "margin-bottom:20px;'>LV</div>"
-        "<div style='font-family:Bebas Neue,sans-serif;font-size:32px;letter-spacing:3px;"
-        "color:#1A1A14;margin-bottom:4px;'>LÍNEA VIVA</div>"
-        "<div style='font-size:10px;color:#6B6456;letter-spacing:2px;"
-        "text-transform:uppercase;margin-bottom:8px;'>Térret · Inventario</div>"
-        "<div style='font-size:12px;color:#B8B0A4;margin-bottom:32px;'>"
-        "Acceso restringido · Solo @terretsports.com y @terret.co</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    if error:
+        st.markdown(
+            "<div style='max-width:380px;margin:80px auto;text-align:center;'>"
+            "<div style='background:#2D6A4F;width:56px;height:56px;border-radius:10px;"
+            "display:inline-flex;align-items:center;justify-content:center;"
+            "font-family:Bebas Neue,sans-serif;font-size:26px;color:#F5F0E8;"
+            "margin-bottom:20px;'>LV</div>"
+            "<div style='font-family:Bebas Neue,sans-serif;font-size:32px;letter-spacing:3px;"
+            "color:#1A1A14;margin-bottom:4px;'>LÍNEA VIVA</div>"
+            "<div style='font-size:10px;color:#6B6456;letter-spacing:2px;"
+            "text-transform:uppercase;margin-bottom:8px;'>Térret · Inventario</div>"
+            "<div style='font-size:12px;color:#B8B0A4;margin-bottom:32px;'>"
+            "Acceso restringido · Solo @terretsports.com y @terret.co</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
         _, col, _ = st.columns([1, 2, 1])
         with col:
-            st.error(error)
+            st.link_button("🔑 INICIAR SESIÓN CON GOOGLE", login_url, use_container_width=True)
+        st.stop()
 
-    _, col, _ = st.columns([1, 2, 1])
-    with col:
-        st.link_button(
-            "🔑 Iniciar sesión con Google",
-            login_url,
-            use_container_width=True,
-        )
+    else:
+        token_url = "https://oauth2.googleapis.com/token"
+        data = {
+            "code":          auth_code,
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "redirect_uri":  redirect_uri,
+            "grant_type":    "authorization_code",
+        }
+        response = requests.post(token_url, data=data)
+
+        if response.status_code == 200:
+            tokens       = response.json()
+            access_token = tokens.get("access_token")
+
+            user_info = requests.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+            ).json()
+
+            user_email  = user_info.get("email", "").lower()
+            user_domain = user_email.split("@")[-1] if "@" in user_email else ""
+
+            allowed_domains = [d.strip().lower() for d in
+                               st.secrets.get("ALLOWED_DOMAINS", "terretsports.com,terret.co").split(",")
+                               if d.strip()]
+
+            if user_domain not in allowed_domains:
+                st.error(f"Acceso denegado: {user_email}. Solo cuentas @terretsports.com y @terret.co.")
+                st.query_params.clear()
+                if st.button("Probar con otra cuenta"):
+                    st.rerun()
+                st.stop()
+
+            st.session_state.logged_in  = True
+            st.session_state.user_email = user_email
+            st.session_state.user_name  = user_info.get("name", "")
+            st.query_params.clear()
+            st.rerun()
+
+        else:
+            st.error("La sesión ha expirado o hubo un error de conexión con Google.")
+            st.query_params.clear()
+            if st.button("Volver a intentar"):
+                st.rerun()
+            st.stop()
 
 
 # ─── SHOPIFY API HELPERS ──────────────────────────────────────────────────────
