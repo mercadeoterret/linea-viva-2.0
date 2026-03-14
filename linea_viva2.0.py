@@ -24,6 +24,8 @@ st.set_page_config(
 # ─── CONSTANTES ───────────────────────────────────────────────────────────────
 LEAD_TIME_DIAS = 30
 UMBRAL_BS      = 25
+LOCATIONS_EXCLUIR = ["Recogida en tienda (NO USAR)"]
+LOCATIONS_VALIDAS = ["TERRET", "Tienda Fisica", "Tienda Móvil - Ferias"]
 DIAS_OBJETIVO  = 60
 MULTIPLO       = 6
 API_VERSION    = "2024-01"
@@ -641,11 +643,13 @@ def vista_dashboard(df, locations):
     loc_names = [loc["name"] for loc in locations]
     loc_cols  = [c for c in df.columns if c.startswith("Stock_")]
     df_view   = df.copy()
+    sel_loc   = "Todas las sucursales"  # default
 
     if loc_cols:
+        loc_names_filtrados = [n for n in loc_names if n not in LOCATIONS_EXCLUIR]
         fc1, fc2 = st.columns([2, 1])
         with fc1:
-            sel_loc = st.selectbox("📍 Filtrar por sucursal:", ["Todas las sucursales"] + loc_names, key="dash_loc")
+            sel_loc = st.selectbox("📍 Filtrar por sucursal:", ["Todas las sucursales"] + loc_names_filtrados, key="dash_loc")
         with fc2:
             tipo_inv = st.radio("📦 Tipo:", ["Disponible", "Físico"], horizontal=True, key="dash_tipo_inv")
 
@@ -678,8 +682,11 @@ def vista_dashboard(df, locations):
     tiene_precios = df_view["Precio Venta"].sum() > 0
 
     # ── Metricas ──────────────────────────────────────────────────────────────
-    total_skus  = len(df_view)
-    total_prods = df_view["Producto"].nunique()
+    # Filtrar por sucursal para SKUs/Productos: solo los que tienen stock > 0 en la sucursal
+    df_con_stock = df_view[df_view["Stock"] > 0] if sel_loc != "Todas las sucursales" else df_view
+
+    total_skus  = len(df_con_stock)
+    total_prods = df_con_stock["Producto"].nunique()
     total_stock = int(df_view["Stock"].sum())
     reprog_n    = int(df_view[df_view["_estado"] == "REPROGRAMAR"]["Producto"].nunique())
     vc          = df_view["_valor_costo"].sum()
@@ -703,6 +710,37 @@ def vista_dashboard(df, locations):
         with c3:
             mg = ((vv - vc) / vc * 100) if vc > 0 else 0
             st.metric("Margen potencial", f"{mg:.1f}%" if mg > 0 else "—")
+
+    # ── Desglose por sucursal (solo en vista "Todas") ─────────────────────────
+    if sel_loc == "Todas las sucursales" and loc_cols:
+        st.markdown(
+            "<div style='font-family:Bebas Neue,sans-serif;font-size:12px;"
+            "letter-spacing:2px;color:#6B6456;margin:16px 0 8px 0;'>"
+            "STOCK DISPONIBLE POR SUCURSAL</div>",
+            unsafe_allow_html=True,
+        )
+        locs_mostrar = [n for n in LOCATIONS_VALIDAS if f"Stock_{n}" in df_view.columns]
+        cols_locs = st.columns(len(locs_mostrar))
+        for i, loc_name in enumerate(locs_mostrar):
+            col_disp   = f"Stock_{loc_name}"
+            col_fisico = f"Fisico_{loc_name}"
+            stock_loc  = int(df_view[col_disp].sum()) if col_disp in df_view.columns else 0
+            fisico_loc = int(df_view[col_fisico].sum()) if col_fisico in df_view.columns else 0
+            comp_loc   = max(0, fisico_loc - stock_loc)
+            skus_loc   = int((df_view[col_disp] > 0).sum()) if col_disp in df_view.columns else 0
+            with cols_locs[i]:
+                st.markdown(
+                    f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-radius:6px;"
+                    f"padding:10px 14px;'>"
+                    f"<div style='font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
+                    f"color:#6B6456;margin-bottom:6px;'>{loc_name}</div>"
+                    f"<div style='font-family:Bebas Neue,sans-serif;font-size:1.6rem;color:#2D6A4F;"
+                    f"line-height:1;'>{stock_loc:,}</div>"
+                    f"<div style='font-size:10px;color:#6B6456;margin-top:4px;'>"
+                    f"{skus_loc} SKUs · {comp_loc:,} comprometidas</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
     st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
 
