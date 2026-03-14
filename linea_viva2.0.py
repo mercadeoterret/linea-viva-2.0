@@ -593,34 +593,36 @@ def vista_dashboard(df, locations):
         "letter-spacing:3px;color:#1A1A14;margin-bottom:4px;'>DASHBOARD</div>"
         f"<div style='font-size:11px;color:#6B6456;letter-spacing:1px;"
         f"text-transform:uppercase;margin-bottom:20px;'>"
-        f"Visión general · {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>",
+        f"Vision general del inventario · {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>",
         unsafe_allow_html=True,
     )
 
     if df.empty:
-        st.warning("Sin datos. Verifica la conexión con Shopify.")
+        st.warning("Sin datos. Verifica la conexion con Shopify.")
         return
 
+    # ── Filtro de location ────────────────────────────────────────────────────
     loc_names = [loc["name"] for loc in locations]
     loc_cols  = [c for c in df.columns if c.startswith("Stock_")]
+    df_view   = df.copy()
 
-    df_view = df.copy()
     if loc_cols:
-        sel_loc = st.selectbox("📍 Sucursal", ["Todas"] + loc_names, key="dash_loc")
-        if sel_loc != "Todas":
+        sel_loc = st.selectbox("Filtrar por sucursal:", ["Todas las sucursales"] + loc_names, key="dash_loc")
+        if sel_loc != "Todas las sucursales":
             col_loc = f"Stock_{sel_loc}"
             if col_loc in df_view.columns:
-                df_view["Stock"]     = df_view[col_loc].clip(lower=0)
-                df_view["DiasInv_n"] = df_view.apply(
-                    lambda r: round(r["Stock"] / (r["Ventas60d"] / 60), 1) if r["Ventas60d"] > 0 else 9999, axis=1
-                )
+                df_view["Stock"]        = df_view[col_loc].clip(lower=0)
+                df_view["DiasInv_n"]    = df_view.apply(
+                    lambda r: round(r["Stock"] / (r["Ventas60d"] / 60), 1) if r["Ventas60d"] > 0 else 9999, axis=1)
                 df_view["_estado"]      = df_view.apply(lambda r: calcular_estado(r["Stock"], r["Ventas60d"], r["DiasInv_n"]), axis=1)
                 df_view["_valor_costo"] = df_view["Stock"] * df_view["Costo"]
                 df_view["_valor_venta"] = df_view["Stock"] * df_view["Precio Venta"]
+        st.markdown("<hr style='border-color:#D4CFC4;margin:10px 0 20px 0;'>", unsafe_allow_html=True)
 
     tiene_costos  = df_view["Costo"].sum() > 0
     tiene_precios = df_view["Precio Venta"].sum() > 0
 
+    # ── Metricas ──────────────────────────────────────────────────────────────
     total_skus  = len(df_view)
     total_prods = df_view["Producto"].nunique()
     total_stock = int(df_view["Stock"].sum())
@@ -636,239 +638,264 @@ def vista_dashboard(df, locations):
 
     if tiene_costos or tiene_precios:
         c1, c2, c3 = st.columns(3)
-        with c1: st.metric("Valor inventario (costo)", fmt_pesos(vc) if vc else "—")
-        with c2: st.metric("Valor inventario (venta)", fmt_pesos(vv) if vv else "—")
+        with c1: st.metric("Valor inventario (costo)", "$" + f"{vc:,.0f}" if vc > 0 else "—")
+        with c2: st.metric("Valor inventario (venta)", "$" + f"{vv:,.0f}" if vv > 0 else "—")
         with c3:
             mg = ((vv - vc) / vc * 100) if vc > 0 else 0
-            st.metric("Margen potencial", f"{mg:.1f}%" if mg else "—")
+            st.metric("Margen potencial", f"{mg:.1f}%" if mg > 0 else "—")
 
     st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
 
-    # Pastel + Críticos
+    # ── FILA 1: Pastel + Stock Critico ────────────────────────────────────────
     col_l, col_r = st.columns(2)
+
     with col_l:
         st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#6B6456;margin-bottom:6px;'>SEGMENTOS</div>",
+            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>SEGMENTOS</div>",
             unsafe_allow_html=True,
         )
         seg = df_view.groupby("_estado")["Producto"].nunique().reset_index()
-        seg.columns = ["Estado", "N"]
-        seg = seg[seg["N"] > 0]
+        seg.columns = ["Estado", "Productos"]
+        seg = seg[seg["Productos"] > 0]
 
+        colores_pie = [color_estado(e) for e in seg["Estado"]]
         labels_pie  = [ESTADOS.get(e, {}).get("label", e) for e in seg["Estado"]]
-        colors_pie  = [color_estado(e) for e in seg["Estado"]]
+
         fig_pie = go.Figure(go.Pie(
             labels=labels_pie,
-            values=seg["N"],
-            hole=0.6,
-            marker=dict(colors=colors_pie, line=dict(color="#F5F0E8", width=2)),
+            values=seg["Productos"],
+            hole=0.55,
+            marker=dict(colors=colores_pie, line=dict(color="#F5F0E8", width=2)),
             textinfo="label+percent",
-            textposition="outside",
-            textfont=dict(size=10),
-            hovertemplate="<b>%{label}</b><br>%{value} productos · %{percent}<extra></extra>",
-            automargin=True,
+            textfont=dict(size=11, color="#1A1A14"),
+            hovertemplate="<b>%{label}</b><br>%{value} productos<br>%{percent}<extra></extra>",
         ))
         fig_pie.update_layout(
-            **PLOT_BASE, height=380,
-            margin=dict(t=40, b=40, l=80, r=80),
+            paper_bgcolor="#EDEAE0",
+            plot_bgcolor="#EDEAE0",
+            font=dict(color="#1A1A14", family="DM Sans"),
+            margin=dict(t=10, b=10, l=10, r=10),
+            height=280,
             showlegend=False,
-            annotations=[dict(text=f"<b>{total_prods}</b><br>productos",
-                              x=0.5, y=0.5, font_size=16, showarrow=False,
-                              font=dict(color="#1A1A14"))],
+            annotations=[dict(
+                text="<b>" + str(total_prods) + "</b><br>productos",
+                x=0.5, y=0.5, font_size=16, showarrow=False,
+                font=dict(color="#1A1A14"),
+            )],
         )
         st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
 
     with col_r:
         st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#6B6456;margin-bottom:6px;'>STOCK CRÍTICO — TOP 10</div>",
+            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>STOCK CRITICO — TOP 10</div>",
             unsafe_allow_html=True,
         )
         criticos = (
             df_view[df_view["_estado"] == "REPROGRAMAR"]
             .groupby("Producto")
-            .agg(
-                ventas=("Ventas60d", "sum"),
-                stock=("Stock", "sum"),
-                dias_min=("DiasInv_n", "min"),
-            )
+            .agg(ventas=("Ventas60d", "sum"), stock=("Stock", "sum"), dias_min=("DiasInv_n", "min"))
             .reset_index()
             .sort_values("ventas", ascending=False)
             .head(10)
+            .sort_values("ventas", ascending=True)
         )
-        # Ordenar para el gráfico: mayor urgencia arriba = mayor ventas abajo (horizontal invertido)
-        criticos = criticos.sort_values("ventas", ascending=True)
-
         if criticos.empty:
             st.markdown(
-                "<div style='text-align:center;padding:60px;color:#6B6456;'>Sin productos críticos 🎉</div>",
+                "<div style='text-align:center;padding:40px;color:#6B6456;'>Sin productos criticos</div>",
                 unsafe_allow_html=True,
             )
         else:
-            def estado_crit(row):
-                if row["stock"] == 0:
-                    return "⚡ QUIEBRE"
-                return f"{int(row['dias_min'])}d"
+            def label_crit(row):
+                return "QUIEBRE" if row["stock"] == 0 else f"{int(row['dias_min'])}d"
 
-            for _, row in criticos.sort_values("ventas", ascending=False).iterrows():
-                es_quiebre = row["stock"] == 0
-                color_barra = "#FF3B30" if es_quiebre else "#FFB800"
-                pct = int(row["ventas"] / criticos["ventas"].max() * 100) if criticos["ventas"].max() > 0 else 0
-                estado_txt = "⚡ QUIEBRE" if es_quiebre else f"{int(row['dias_min'])}d"
-                st.markdown(
-                    f"<div style='display:grid;grid-template-columns:180px 1fr 60px 70px;"
-                    f"gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid #D4CFC4;'>"
-                    f"<div style='font-size:11px;color:#1A1A14;font-weight:500;"
-                    f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' title='{row["Producto"]}'>"
-                    f"{row['Producto'][:26] + '...' if len(row['Producto']) > 26 else row['Producto']}</div>"
-                    f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
-                    f"<div style='background:{color_barra};width:{pct}%;height:14px;border-radius:3px;'></div>"
-                    f"</div>"
-                    f"<div style='font-family:DM Mono,monospace;font-size:11px;color:{color_barra};font-weight:500;'>{estado_txt}</div>"
-                    f"<div style='font-family:DM Mono,monospace;font-size:11px;color:#6B6456;text-align:right;'>{int(row['ventas'])} u</div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
+            fig_crit = go.Figure(go.Bar(
+                x=criticos["ventas"],
+                y=criticos["Producto"],
+                orientation="h",
+                marker=dict(
+                    color=criticos["stock"].apply(lambda s: "#FF3B30" if s == 0 else "#FFB800"),
+                    opacity=0.85,
+                ),
+                text=criticos.apply(label_crit, axis=1),
+                textposition="outside",
+                textfont=dict(size=10, color="#1A1A14"),
+                hovertemplate="<b>%{y}</b><br>%{x} u vendidas 60d<extra></extra>",
+            ))
+            fig_crit.update_layout(
+                paper_bgcolor="#EDEAE0",
+                plot_bgcolor="#EDEAE0",
+                font=dict(color="#1A1A14", family="DM Sans"),
+                margin=dict(t=10, b=10, l=180, r=80),
+                height=310,
+                xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False,
+                           range=[0, criticos["ventas"].max() * 1.35]),
+                yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+            )
+            st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
 
-    # Top ventas + Por categoría
+    # ── FILA 2: Top Ventas + Stock por Categoria ──────────────────────────────
     col_l2, col_r2 = st.columns(2)
+
     with col_l2:
         tc1, tc2, tc3 = st.columns([3, 1, 1])
         with tc1:
             st.markdown(
-                "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-                "letter-spacing:2px;color:#6B6456;margin-bottom:6px;'>TOP VENTAS 60D</div>",
+                "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+                "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>TOP VENTAS 60D</div>",
                 unsafe_allow_html=True,
             )
         with tc2:
             n_top = st.select_slider("", options=[10, 15, 20, 30, 50], value=10,
-                                     key="top_n", label_visibility="collapsed")
+                                     key="slider_top_ventas", label_visibility="collapsed")
         with tc3:
-            por_sku = st.toggle("SKU", key="top_sku", value=False)
+            vista_sku = st.toggle("Por SKU", key="toggle_top_sku", value=False)
 
-        if por_sku:
-            top_data = df_view.sort_values("Ventas60d", ascending=True).tail(n_top)
-            y_v = [(s + " · " + v)[:35] for s, v in zip(top_data["SKU"], top_data["Variante"].str[:14])]
-            x_v = top_data["Ventas60d"].tolist()
-            c_v = [color_estado(e) for e in top_data["_estado"]]
+        if vista_sku:
+            top_data = df_view[["Producto","Variante","SKU","Ventas60d","_estado"]].copy()
+            top_data = top_data.sort_values("Ventas60d", ascending=True).tail(n_top)
+            top_data["etiqueta"] = top_data["SKU"] + "  " + top_data["Variante"].str[:18]
+            y_vals  = top_data["etiqueta"].tolist()
+            x_vals  = top_data["Ventas60d"].tolist()
+            estados = top_data["_estado"].tolist()
         else:
             top_data = (
                 df_view.groupby("Producto")
-                .agg(Ventas60d=("Ventas60d", "sum"), _estado=("_estado", "first"))
+                .agg(Ventas60d=("Ventas60d","sum"), _estado=("_estado","first"))
                 .reset_index()
                 .sort_values("Ventas60d", ascending=True)
                 .tail(n_top)
             )
-            y_v = [p[:32]+"..." if len(p)>32 else p for p in top_data["Producto"].tolist()]
-            x_v = top_data["Ventas60d"].tolist()
-            c_v = [color_estado(e) for e in top_data["_estado"]]
+            y_vals  = top_data["Producto"].tolist()
+            x_vals  = top_data["Ventas60d"].tolist()
+            estados = top_data["_estado"].tolist()
 
-        max_v = max(x_v) if x_v else 1
-        for label, val, col in zip(y_v, x_v, c_v):
-            pct = int(val / max_v * 100)
-            st.markdown(
-                f"<div style='display:grid;grid-template-columns:200px 1fr 55px;"
-                f"gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid #D4CFC4;'>"
-                f"<div style='font-size:11px;color:#1A1A14;font-weight:500;"
-                f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
-                f"{label[:30] + '...' if len(str(label)) > 30 else label}</div>"
-                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
-                f"<div style='background:{col};width:{pct}%;height:14px;border-radius:3px;opacity:0.85;'></div>"
-                f"</div>"
-                f"<div style='font-family:DM Mono,monospace;font-size:11px;color:#6B6456;text-align:right;'>{int(val)} u</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
+        colores_top = [
+            "#2D6A4F" if e == "ESTRELLA" else
+            "#FFB800" if e == "ALTA_ROTACION" else
+            "#FF3B30" if e == "REPROGRAMAR" else "#4488FF"
+            for e in estados
+        ]
+        fig_top = go.Figure(go.Bar(
+            x=x_vals, y=y_vals, orientation="h",
+            marker=dict(color=colores_top),
+            text=[str(int(v)) + " u" for v in x_vals],
+            textposition="outside",
+            textfont=dict(size=10, color="#1A1A14"),
+        ))
+        fig_top.update_layout(
+            paper_bgcolor="#EDEAE0",
+            plot_bgcolor="#EDEAE0",
+            font=dict(color="#1A1A14", family="DM Sans"),
+            margin=dict(t=10, b=10, l=240, r=70),
+            height=max(340, n_top * 34),
+            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+        )
+        st.plotly_chart(fig_top, use_container_width=True, config={"displayModeBar": False})
 
     with col_r2:
         st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#6B6456;margin-bottom:6px;'>STOCK POR CATEGORÍA</div>",
+            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>STOCK POR CATEGORIA</div>",
             unsafe_allow_html=True,
         )
         por_tipo = (
             df_view[df_view["Tipo"].str.strip() != ""]
             .groupby("Tipo")
-            .agg(stock=("Stock", "sum"), valor_costo=("_valor_costo", "sum"))
+            .agg(stock=("Stock","sum"), valor_costo=("_valor_costo","sum"), valor_venta=("_valor_venta","sum"))
             .reset_index()
             .sort_values("stock", ascending=True)
         )
         por_tipo = por_tipo[por_tipo["stock"] > 0]
-        x_cat   = por_tipo["valor_costo"] if tiene_costos else por_tipo["stock"]
-        txt_cat = [fmt_pesos(v) for v in x_cat] if tiene_costos else [f"{int(v)} u" for v in x_cat]
 
-        # Mismo enfoque HTML para consistencia visual
-        max_cat = x_cat.max() if len(x_cat) > 0 else 1
-        for tipo, val, txt in zip(por_tipo["Tipo"], x_cat, txt_cat):
-            pct = int(val / max_cat * 100) if max_cat > 0 else 0
-            st.markdown(
-                f"<div style='display:grid;grid-template-columns:150px 1fr 90px;"
-                f"gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid #D4CFC4;'>"
-                f"<div style='font-size:11px;color:#1A1A14;font-weight:500;"
-                f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>{str(tipo)[:22]}</div>"
-                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
-                f"<div style='background:#4488FF;width:{pct}%;height:14px;border-radius:3px;opacity:0.85;'></div>"
-                f"</div>"
-                f"<div style='font-family:DM Mono,monospace;font-size:10px;color:#6B6456;text-align:right;'>{txt}</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
+        x_cat  = por_tipo["valor_costo"] if tiene_costos else por_tipo["stock"]
+        txt_cat = ["$" + f"{v:,.0f}" for v in x_cat] if tiene_costos else [str(int(v)) + " u" for v in x_cat]
 
-    # Valor por categoría
+        fig_cat = go.Figure(go.Bar(
+            x=x_cat,
+            y=por_tipo["Tipo"].str[:20],
+            orientation="h",
+            marker=dict(color="#4488FF", opacity=0.8),
+            text=txt_cat,
+            textposition="outside",
+            textfont=dict(size=9, color="#1A1A14"),
+            hovertemplate="<b>%{y}</b><br>%{text}<extra></extra>",
+        ))
+        fig_cat.update_layout(
+            paper_bgcolor="#EDEAE0",
+            plot_bgcolor="#EDEAE0",
+            font=dict(color="#1A1A14", family="DM Sans"),
+            margin=dict(t=10, b=10, l=10, r=80),
+            height=300,
+            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, tickfont=dict(size=9)),
+        )
+        st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+
+    # ── FILA 3: Valor de Inventario por Categoria ─────────────────────────────
     if tiene_costos or tiene_precios:
         st.markdown(
-            "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
-            "letter-spacing:2px;color:#6B6456;margin:8px 0;'>VALOR DE INVENTARIO POR CATEGORÍA</div>",
+            "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+            "letter-spacing:2px;color:#6B6456;margin:8px 0;'>VALOR DE INVENTARIO POR CATEGORIA</div>",
             unsafe_allow_html=True,
         )
         pv = (
             df_view[df_view["Tipo"].str.strip() != ""]
             .groupby("Tipo")
-            .agg(vc=("_valor_costo", "sum"), vv=("_valor_venta", "sum"))
+            .agg(vc=("_valor_costo","sum"), vv=("_valor_venta","sum"))
             .reset_index()
             .sort_values("vv", ascending=True)
         )
         pv = pv[(pv["vc"] > 0) | (pv["vv"] > 0)]
-        cats = pv["Tipo"].tolist()
+        cats   = pv["Tipo"].tolist()
+        costos = pv["vc"].tolist()
+        ventas = pv["vv"].tolist()
+
         fig_val = go.Figure()
         fig_val.add_trace(go.Bar(
-            name="Precio venta", x=pv["vv"], y=cats, orientation="h",
+            name="Precio venta", x=ventas, y=cats, orientation="h",
             marker=dict(color="#2D6A4F", opacity=0.85),
-            text=[fmt_pesos(v) for v in pv["vv"]], textposition="outside",
+            text=["$" + f"{v/1e6:.1f}M" if v >= 1e6 else "$" + f"{v:,.0f}" for v in ventas],
+            textposition="outside",
             textfont=dict(size=9, color="#2D6A4F"),
             hovertemplate="<b>%{y}</b><br>Venta: $%{x:,.0f}<extra></extra>",
         ))
         fig_val.add_trace(go.Bar(
-            name="Costo", x=pv["vc"], y=cats, orientation="h",
+            name="Costo", x=costos, y=cats, orientation="h",
             marker=dict(color="#4488FF", opacity=0.9),
-            text=[fmt_pesos(v) for v in pv["vc"]], textposition="inside",
-            textfont=dict(size=8),
+            text=["$" + f"{v/1e6:.1f}M" if v >= 1e6 else "$" + f"{v:,.0f}" for v in costos],
+            textposition="inside",
+            textfont=dict(size=8, color="#1A1A14"),
             hovertemplate="<b>%{y}</b><br>Costo: $%{x:,.0f}<extra></extra>",
         ))
         fig_val.update_layout(
-            barmode="overlay", **PLOT_BASE,
+            barmode="overlay",
+            paper_bgcolor="#EDEAE0",
+            plot_bgcolor="#EDEAE0",
+            font=dict(color="#1A1A14", family="DM Sans"),
+            margin=dict(t=30, b=20, l=160, r=90),
             height=max(320, len(cats) * 38),
-            margin=dict(t=30, b=20, l=200, r=100),
             legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0,
                         font=dict(size=10), bgcolor="rgba(0,0,0,0)", traceorder="reversed"),
             xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
-                       showticklabels=False),
+                       tickprefix="$", tickformat=",.0f", tickfont=dict(size=9)),
             yaxis=dict(showgrid=False, tickfont=dict(size=10),
-                       categoryorder="array", categoryarray=cats),
+                       automargin=False, categoryorder="array", categoryarray=cats),
         )
         st.plotly_chart(fig_val, use_container_width=True, config={"displayModeBar": False})
 
-    # Tabla resumen
+    # ── Tabla resumen por segmento ────────────────────────────────────────────
     st.markdown(
-        "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
+        "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
         "letter-spacing:2px;color:#6B6456;margin:8px 0;'>RESUMEN POR SEGMENTO</div>",
         unsafe_allow_html=True,
     )
     resumen = []
     for estado in ORDEN_SIDEBAR:
         cfg = ESTADOS[estado]
-        sub = df_view[(df_view["_estado"] == estado) & (df_view["Stock"] > 0)]
+        sub = df_view[df_view["_estado"] == estado]
         if sub.empty:
             continue
         row = {
@@ -879,9 +906,9 @@ def vista_dashboard(df, locations):
             "Ventas 60d":  int(sub["Ventas60d"].sum()),
         }
         if tiene_costos:
-            row["Valor costo"] = fmt_pesos(sub["_valor_costo"].sum())
+            row["Valor costo"] = "$" + f"{sub['_valor_costo'].sum():,.0f}"
         if tiene_precios:
-            row["Valor venta"] = fmt_pesos(sub["_valor_venta"].sum())
+            row["Valor venta"] = "$" + f"{sub['_valor_venta'].sum():,.0f}"
         resumen.append(row)
     st.dataframe(pd.DataFrame(resumen), use_container_width=True, hide_index=True)
 
