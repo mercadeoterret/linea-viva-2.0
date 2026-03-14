@@ -471,19 +471,40 @@ def cargar_stock(_token, _productos):
 
 
 @st.cache_data(ttl=3600)
-def cargar_ventas_60d(_token):
+def cargar_ventas_60d(_token, _locations):
+    """
+    Retorna:
+      ventas_global: {variant_id: total_qty}
+      ventas_por_loc: {variant_id: {loc_name: qty}}
+    location_id en la orden = punto de venta donde se procesó (igual que Apps Script)
+    """
+    loc_id_to_name = {str(loc["id"]): loc["name"] for loc in _locations}
+    ONLINE = "TERRET"  # ventas sin location_id = canal online/bodega principal
+
     desde = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     orders = rest_paginated(
         _token, "orders.json", "orders",
-        {"status": "any", "created_at_min": desde, "fields": "id,line_items", "limit": 250},
+        {"status": "any", "created_at_min": desde,
+         "fields": "id,location_id,line_items", "limit": 250},
     )
-    ventas = {}
+    ventas_global  = {}
+    ventas_por_loc = {}
+
     for order in orders:
+        loc_id   = str(order.get("location_id") or "")
+        loc_name = loc_id_to_name.get(loc_id, ONLINE)
+
         for item in order.get("line_items", []):
             vid = str(item.get("variant_id", ""))
-            if vid and vid != "None":
-                ventas[vid] = ventas.get(vid, 0) + int(item.get("quantity", 0))
-    return ventas
+            if not vid or vid == "None":
+                continue
+            qty = int(item.get("quantity", 0))
+            ventas_global[vid] = ventas_global.get(vid, 0) + qty
+            if vid not in ventas_por_loc:
+                ventas_por_loc[vid] = {}
+            ventas_por_loc[vid][loc_name] = ventas_por_loc[vid].get(loc_name, 0) + qty
+
+    return ventas_global, ventas_por_loc
 
 
 @st.cache_data(ttl=3600)
@@ -513,6 +534,8 @@ def cargar_ventas_rango(_token, dias):
 
 
 def construir_df(productos, stock_map, ventas_map, locations):
+    """ventas_map = (ventas_global, ventas_por_loc)"""
+    ventas_global, ventas_por_loc = ventas_map
     loc_id_to_name = {str(loc["id"]): loc["name"] for loc in locations}
     rows = []
     for prod in productos:
@@ -521,13 +544,13 @@ def construir_df(productos, stock_map, ventas_map, locations):
             vid        = var["variant_id"]
             loc_stocks = stock_map.get(iid, {})
 
-            # Totales globales
             stock_total   = sum(v["available"] for v in loc_stocks.values())
             on_hand_total = sum(v["on_hand"]   for v in loc_stocks.values())
             committed     = max(0, on_hand_total - stock_total)
 
-            ventas60d = ventas_map.get(vid, 0)
-            dias_inv  = round(stock_total / (ventas60d / 60), 1) if ventas60d > 0 else 9999
+            ventas60d    = ventas_global.get(vid, 0)
+            v_por_loc    = ventas_por_loc.get(vid, {})
+            dias_inv     = round(stock_total / (ventas60d / 60), 1) if ventas60d > 0 else 9999
 
             row = {
                 "Producto":     prod["title"],
@@ -545,11 +568,16 @@ def construir_df(productos, stock_map, ventas_map, locations):
                 "_inv_item_id": iid,
                 "_product_id":  prod["product_id"],
             }
-            # Stock disponible y físico por location
+            # Stock por location
             for loc_id, loc_name in loc_id_to_name.items():
                 loc_data = loc_stocks.get(loc_id, {"available": 0, "on_hand": 0})
                 row[f"Stock_{loc_name}"]   = loc_data["available"]
                 row[f"Fisico_{loc_name}"]  = loc_data["on_hand"]
+            # Ventas por location
+            for loc_name in loc_id_to_name.values():
+                row[f"Ventas_{loc_name}"] = v_por_loc.get(loc_name, 0)
+            # Ventas online (sin location_id)
+            row["Ventas_TERRET"] = v_por_loc.get("TERRET", 0)
             rows.append(row)
 
     df = pd.DataFrame(rows)
@@ -839,7 +867,8 @@ def vista_dashboard(df, locations):
             st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-    _seccion('TOP VENTAS 60D', 'Productos activos · últimos 60 días')
+    _label_loc = f' · {sel_loc}' if sel_loc != 'Todas las sucursales' else ''
+    _seccion('TOP VENTAS 60D', f'Últimos 60 días{_label_loc}')
     # ── FILA 2: Top Ventas (ancho completo) ──────────────────────────────────
     tc1, tc2, tc3 = st.columns([8, 1, 1])
     with tc1:
@@ -861,17 +890,19 @@ def vista_dashboard(df, locations):
             x_vals  = top_data["Ventas60d"].tolist()
             estados = top_data["_estado"].tolist()
         else:
+            # Si hay sucursal seleccionada, usar ventas de esa sucursal
+            col_ventas = f"Ventas_{sel_loc}" if sel_loc != "Todas las sucursales" and f"Ventas_{sel_loc}" in df_view.columns else "Ventas60d"
+
             top_data = (
                 df_view.groupby("_product_id")
                 .apply(lambda g: pd.Series({
                     "Producto":  g["Producto"].iloc[0],
-                    "Ventas60d": g["Ventas60d"].sum(),
-                    "_estado":   g.loc[g["Ventas60d"].idxmax(), "_estado"],
+                    "Ventas60d": g[col_ventas].sum(),
+                    "_estado":   g.loc[g[col_ventas].idxmax(), "_estado"] if g[col_ventas].sum() > 0 else g["_estado"].iloc[0],
                 }))
                 .reset_index(drop=True)
-                .sort_values("Ventas60d", ascending=True)
-                .tail(n_top)
             )
+            top_data = top_data[top_data["Ventas60d"] > 0].sort_values("Ventas60d", ascending=True).tail(n_top)
             y_vals  = top_data["Producto"].tolist()
             x_vals  = top_data["Ventas60d"].tolist()
             estados = top_data["_estado"].tolist()
@@ -1601,7 +1632,7 @@ def main():
             locations  = cargar_locations(token)
             productos  = cargar_productos(token)
             stock_map  = cargar_stock(token, productos)
-            ventas_map = cargar_ventas_60d(token)
+            ventas_map = cargar_ventas_60d(token, locations)
             df         = construir_df(productos, stock_map, ventas_map, locations)
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 401:
