@@ -96,6 +96,31 @@ section[data-testid="stSidebar"] .stButton > button:hover {
     font-size: 13px !important;
 }
 hr { border-color: #D4CFC4 !important; }
+
+/* Radio buttons y labels */
+[data-testid="stRadio"] label { color: #1A1A14 !important; }
+[data-testid="stRadio"] p { color: #1A1A14 !important; }
+[data-testid="stRadio"] span { color: #1A1A14 !important; }
+div[role="radiogroup"] label { color: #1A1A14 !important; }
+div[role="radiogroup"] p { color: #1A1A14 !important; }
+
+/* Selectbox y otros labels */
+[data-testid="stSelectbox"] label { color: #1A1A14 !important; }
+[data-testid="stSelectbox"] p { color: #1A1A14 !important; }
+label[data-testid="stWidgetLabel"] { color: #1A1A14 !important; }
+label[data-testid="stWidgetLabel"] p { color: #1A1A14 !important; }
+
+/* Toggle */
+[data-testid="stToggle"] label { color: #1A1A14 !important; }
+[data-testid="stToggle"] p { color: #1A1A14 !important; }
+
+/* Todos los párrafos en el body principal */
+[data-testid="stAppViewContainer"] p { color: #1A1A14 !important; }
+[data-testid="stAppViewContainer"] span { color: #1A1A14 !important; }
+
+/* Radio button circle colors */
+[data-baseweb="radio"] div { border-color: #2D6A4F !important; }
+[data-baseweb="radio"] [aria-checked="true"] div { background: #2D6A4F !important; }
 [data-testid="stDataFrame"] { background: #EDEAE0 !important; }
 [data-testid="stDataFrame"] iframe { background: #EDEAE0 !important; }
 .stDataFrame { background: #EDEAE0 !important; }
