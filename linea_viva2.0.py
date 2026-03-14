@@ -860,9 +860,16 @@ def vista_dashboard(df, locations):
             x_vals  = top_data["Ventas60d"].tolist()
             estados = top_data["_estado"].tolist()
         else:
+            # Estado predominante = el del SKU con más ventas dentro del producto
+            def estado_predominante(g):
+                return g.loc[g["Ventas60d"].idxmax(), "_estado"]
+
             top_data = (
                 df_view.groupby("Producto")
-                .agg(Ventas60d=("Ventas60d","sum"), _estado=("_estado","first"))
+                .apply(lambda g: pd.Series({
+                    "Ventas60d": g["Ventas60d"].sum(),
+                    "_estado":   g.loc[g["Ventas60d"].idxmax(), "_estado"],
+                }))
                 .reset_index()
                 .sort_values("Ventas60d", ascending=True)
                 .tail(n_top)
