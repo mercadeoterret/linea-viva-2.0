@@ -433,12 +433,13 @@ def cargar_stock(_token, _productos):
             {"inventory_item_ids": ",".join(batch), "limit": 250},
         )
         for n in niveles:
-            iid = str(n["inventory_item_id"])
-            lid = str(n["location_id"])
-            qty = max(0, int(n.get("available", 0) or 0))
+            iid       = str(n["inventory_item_id"])
+            lid       = str(n["location_id"])
+            available = max(0, int(n.get("available", 0) or 0))
+            on_hand   = max(0, int(n.get("on_hand",   0) or 0))
             if iid not in stock_map:
                 stock_map[iid] = {}
-            stock_map[iid][lid] = qty
+            stock_map[iid][lid] = {"available": available, "on_hand": on_hand}
     return stock_map
 
 
@@ -492,25 +493,35 @@ def construir_df(productos, stock_map, ventas_map, locations):
             iid        = var["inventory_item_id"]
             vid        = var["variant_id"]
             loc_stocks = stock_map.get(iid, {})
-            stock_total = sum(loc_stocks.values())
-            ventas60d   = ventas_map.get(vid, 0)
-            dias_inv    = round(stock_total / (ventas60d / 60), 1) if ventas60d > 0 else 9999
+
+            # Totales globales
+            stock_total   = sum(v["available"] for v in loc_stocks.values())
+            on_hand_total = sum(v["on_hand"]   for v in loc_stocks.values())
+            committed     = max(0, on_hand_total - stock_total)
+
+            ventas60d = ventas_map.get(vid, 0)
+            dias_inv  = round(stock_total / (ventas60d / 60), 1) if ventas60d > 0 else 9999
 
             row = {
-                "Producto":    prod["title"],
-                "Tipo":        prod["product_type"],
-                "Variante":    var["variant_title"],
-                "SKU":         var["sku"],
+                "Producto":     prod["title"],
+                "Tipo":         prod["product_type"],
+                "Variante":     var["variant_title"],
+                "SKU":          var["sku"],
                 "Precio Venta": var["price"],
-                "Costo":       var["cost"],
-                "Stock":       stock_total,
-                "Ventas60d":   ventas60d,
-                "DiasInv_n":   dias_inv,
-                "_variant_id": vid,
+                "Costo":        var["cost"],
+                "Stock":        stock_total,    # disponible
+                "StockFisico":  on_hand_total,  # existencias físicas
+                "Comprometido": committed,       # reservado en órdenes
+                "Ventas60d":    ventas60d,
+                "DiasInv_n":    dias_inv,
+                "_variant_id":  vid,
                 "_inv_item_id": iid,
             }
+            # Stock disponible y físico por location
             for loc_id, loc_name in loc_id_to_name.items():
-                row[f"Stock_{loc_name}"] = loc_stocks.get(loc_id, 0)
+                loc_data = loc_stocks.get(loc_id, {"available": 0, "on_hand": 0})
+                row[f"Stock_{loc_name}"]   = loc_data["available"]
+                row[f"Fisico_{loc_name}"]  = loc_data["on_hand"]
             rows.append(row)
 
     df = pd.DataFrame(rows)
@@ -607,16 +618,35 @@ def vista_dashboard(df, locations):
     df_view   = df.copy()
 
     if loc_cols:
-        sel_loc = st.selectbox("Filtrar por sucursal:", ["Todas las sucursales"] + loc_names, key="dash_loc")
+        fc1, fc2 = st.columns([2, 1])
+        with fc1:
+            sel_loc = st.selectbox("📍 Filtrar por sucursal:", ["Todas las sucursales"] + loc_names, key="dash_loc")
+        with fc2:
+            tipo_inv = st.radio("📦 Tipo:", ["Disponible", "Físico"], horizontal=True, key="dash_tipo_inv")
+
+        usar_fisico = tipo_inv == "Físico"
+
         if sel_loc != "Todas las sucursales":
-            col_loc = f"Stock_{sel_loc}"
-            if col_loc in df_view.columns:
-                df_view["Stock"]        = df_view[col_loc].clip(lower=0)
+            col_disp  = f"Stock_{sel_loc}"
+            col_fisico = f"Fisico_{sel_loc}"
+            col_usar  = col_fisico if usar_fisico else col_disp
+            if col_usar in df_view.columns:
+                df_view["Stock"]        = df_view[col_usar].clip(lower=0)
                 df_view["DiasInv_n"]    = df_view.apply(
                     lambda r: round(r["Stock"] / (r["Ventas60d"] / 60), 1) if r["Ventas60d"] > 0 else 9999, axis=1)
                 df_view["_estado"]      = df_view.apply(lambda r: calcular_estado(r["Stock"], r["Ventas60d"], r["DiasInv_n"]), axis=1)
                 df_view["_valor_costo"] = df_view["Stock"] * df_view["Costo"]
                 df_view["_valor_venta"] = df_view["Stock"] * df_view["Precio Venta"]
+        else:
+            # Todas las sucursales: toggle disponible vs físico global
+            if usar_fisico:
+                df_view["Stock"]        = df_view["StockFisico"]
+                df_view["DiasInv_n"]    = df_view.apply(
+                    lambda r: round(r["Stock"] / (r["Ventas60d"] / 60), 1) if r["Ventas60d"] > 0 else 9999, axis=1)
+                df_view["_estado"]      = df_view.apply(lambda r: calcular_estado(r["Stock"], r["Ventas60d"], r["DiasInv_n"]), axis=1)
+                df_view["_valor_costo"] = df_view["Stock"] * df_view["Costo"]
+                df_view["_valor_venta"] = df_view["Stock"] * df_view["Precio Venta"]
+
         st.markdown("<hr style='border-color:#D4CFC4;margin:10px 0 20px 0;'>", unsafe_allow_html=True)
 
     tiene_costos  = df_view["Costo"].sum() > 0
@@ -630,11 +660,16 @@ def vista_dashboard(df, locations):
     vc          = df_view["_valor_costo"].sum()
     vv          = df_view["_valor_venta"].sum()
 
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("SKUs totales",      total_skus)
-    with c2: st.metric("Productos",         total_prods)
-    with c3: st.metric("Unidades en stock", f"{total_stock:,}")
-    with c4: st.metric("A reprogramar",     reprog_n)
+    total_fisico    = int(df_view["StockFisico"].sum())
+    total_comprometido = int(df_view["Comprometido"].sum())
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: st.metric("SKUs",             total_skus)
+    with c2: st.metric("Productos",        total_prods)
+    with c3: st.metric("Disponible",       f"{total_stock:,}")
+    with c4: st.metric("Comprometido",     f"{total_comprometido:,}",
+                        help="Unidades reservadas en órdenes pendientes")
+    with c5: st.metric("A reprogramar",    reprog_n)
 
     if tiene_costos or tiene_precios:
         c1, c2, c3 = st.columns(3)
@@ -779,22 +814,25 @@ def vista_dashboard(df, locations):
             "#FF3B30" if e == "REPROGRAMAR" else "#4488FF"
             for e in estados
         ]
-        # Truncar nombres antes de pasarlos al eje Y
-        y_vals = [v[:35] + "..." if len(str(v)) > 35 else v for v in y_vals]
+        # Truncar nombres: prioridad al nombre sobre el largo de la barra
+        y_vals = [v[:30] + "..." if len(str(v)) > 30 else v for v in y_vals]
+        max_x  = max(x_vals) if x_vals else 1
         fig_top = go.Figure(go.Bar(
             x=x_vals, y=y_vals, orientation="h",
             marker=dict(color=colores_top),
             text=[str(int(v)) + " u" for v in x_vals],
-            textposition="outside",
-            textfont=dict(size=11, color="#1A1A14"),
+            textposition="inside",
+            textfont=dict(size=11, color="#F5F0E8"),
+            insidetextanchor="end",
         ))
         fig_top.update_layout(
             paper_bgcolor="#EDEAE0",
             plot_bgcolor="#EDEAE0",
             font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=10, b=10, l=280, r=80),
+            margin=dict(t=10, b=10, l=310, r=20),
             height=max(380, n_top * 38),
-            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
+            xaxis=dict(showgrid=False, gridcolor="#D4CFC4", zeroline=False,
+                       showticklabels=False, range=[0, max_x * 1.05]),
             yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14"),
         )
         st.plotly_chart(fig_top, use_container_width=True, config={"displayModeBar": False})
