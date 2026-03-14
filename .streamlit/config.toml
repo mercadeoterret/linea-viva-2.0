@@ -1,0 +1,5 @@
+linea-viva-2.0/
+├── linea_viva2.0.py
+├── requirements.txt
+└── .streamlit/
+    └── config.toml   ← nuevo
