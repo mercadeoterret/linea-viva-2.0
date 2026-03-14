@@ -668,19 +668,19 @@ def vista_dashboard(df, locations):
             hole=0.55,
             marker=dict(colors=colores_pie, line=dict(color="#F5F0E8", width=2)),
             textinfo="label+percent",
-            textfont=dict(size=11, color="#1A1A14"),
+            textfont=dict(size=12, color="#1A1A14"),
             hovertemplate="<b>%{label}</b><br>%{value} productos<br>%{percent}<extra></extra>",
         ))
         fig_pie.update_layout(
             paper_bgcolor="#EDEAE0",
             plot_bgcolor="#EDEAE0",
             font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=10, b=10, l=10, r=10),
-            height=280,
+            margin=dict(t=30, b=30, l=10, r=10),
+            height=380,
             showlegend=False,
             annotations=[dict(
                 text="<b>" + str(total_prods) + "</b><br>productos",
-                x=0.5, y=0.5, font_size=16, showarrow=False,
+                x=0.5, y=0.5, font_size=18, showarrow=False,
                 font=dict(color="#1A1A14"),
             )],
         )
@@ -710,9 +710,11 @@ def vista_dashboard(df, locations):
             def label_crit(row):
                 return "QUIEBRE" if row["stock"] == 0 else f"{int(row['dias_min'])}d"
 
+            criticos["_label"] = criticos["Producto"].apply(
+                lambda x: x[:32] + "..." if len(x) > 32 else x)
             fig_crit = go.Figure(go.Bar(
                 x=criticos["ventas"],
-                y=criticos["Producto"],
+                y=criticos["_label"],
                 orientation="h",
                 marker=dict(
                     color=criticos["stock"].apply(lambda s: "#FF3B30" if s == 0 else "#FFB800"),
@@ -720,18 +722,18 @@ def vista_dashboard(df, locations):
                 ),
                 text=criticos.apply(label_crit, axis=1),
                 textposition="outside",
-                textfont=dict(size=10, color="#1A1A14"),
+                textfont=dict(size=11, color="#1A1A14"),
                 hovertemplate="<b>%{y}</b><br>%{x} u vendidas 60d<extra></extra>",
             ))
             fig_crit.update_layout(
                 paper_bgcolor="#EDEAE0",
                 plot_bgcolor="#EDEAE0",
                 font=dict(color="#1A1A14", family="DM Sans"),
-                margin=dict(t=10, b=10, l=180, r=80),
-                height=310,
+                margin=dict(t=10, b=10, l=260, r=100),
+                height=380,
                 xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False,
-                           range=[0, criticos["ventas"].max() * 1.35]),
-                yaxis=dict(showgrid=False, tickfont=dict(size=10, color="#1A1A14"), tickcolor="#1A1A14"),
+                           range=[0, criticos["ventas"].max() * 1.4]),
+                yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14"),
             )
             st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
 
@@ -777,21 +779,23 @@ def vista_dashboard(df, locations):
             "#FF3B30" if e == "REPROGRAMAR" else "#4488FF"
             for e in estados
         ]
+        # Truncar nombres antes de pasarlos al eje Y
+        y_vals = [v[:35] + "..." if len(str(v)) > 35 else v for v in y_vals]
         fig_top = go.Figure(go.Bar(
             x=x_vals, y=y_vals, orientation="h",
             marker=dict(color=colores_top),
             text=[str(int(v)) + " u" for v in x_vals],
             textposition="outside",
-            textfont=dict(size=10, color="#1A1A14"),
+            textfont=dict(size=11, color="#1A1A14"),
         ))
         fig_top.update_layout(
             paper_bgcolor="#EDEAE0",
             plot_bgcolor="#EDEAE0",
             font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=10, b=10, l=240, r=70),
-            height=max(340, n_top * 34),
+            margin=dict(t=10, b=10, l=280, r=80),
+            height=max(380, n_top * 38),
             xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=10, color="#1A1A14"), tickcolor="#1A1A14"),
+            yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14"),
         )
         st.plotly_chart(fig_top, use_container_width=True, config={"displayModeBar": False})
 
@@ -815,7 +819,7 @@ def vista_dashboard(df, locations):
 
         fig_cat = go.Figure(go.Bar(
             x=x_cat,
-            y=por_tipo["Tipo"].str[:20],
+            y=por_tipo["Tipo"].str[:18],
             orientation="h",
             marker=dict(color="#4488FF", opacity=0.8),
             text=txt_cat,
@@ -827,10 +831,10 @@ def vista_dashboard(df, locations):
             paper_bgcolor="#EDEAE0",
             plot_bgcolor="#EDEAE0",
             font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=10, b=10, l=130, r=80),
-            height=300,
+            margin=dict(t=10, b=10, l=170, r=100),
+            height=max(320, len(por_tipo) * 28),
             xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=9, color="#1A1A14"), tickcolor="#1A1A14"),
+            yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14"),
         )
         st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
 
@@ -854,8 +858,9 @@ def vista_dashboard(df, locations):
         ventas = pv["vv"].tolist()
 
         fig_val = go.Figure()
+        cats_short = [c[:18] + "..." if len(c) > 18 else c for c in cats]
         fig_val.add_trace(go.Bar(
-            name="Precio venta", x=ventas, y=cats, orientation="h",
+            name="Precio venta", x=ventas, y=cats_short, orientation="h",
             marker=dict(color="#2D6A4F", opacity=0.85),
             text=["$" + f"{v/1e6:.1f}M" if v >= 1e6 else "$" + f"{v:,.0f}" for v in ventas],
             textposition="outside",
@@ -863,7 +868,7 @@ def vista_dashboard(df, locations):
             hovertemplate="<b>%{y}</b><br>Venta: $%{x:,.0f}<extra></extra>",
         ))
         fig_val.add_trace(go.Bar(
-            name="Costo", x=costos, y=cats, orientation="h",
+            name="Costo", x=costos, y=cats_short, orientation="h",
             marker=dict(color="#4488FF", opacity=0.9),
             text=["$" + f"{v/1e6:.1f}M" if v >= 1e6 else "$" + f"{v:,.0f}" for v in costos],
             textposition="inside",
@@ -875,14 +880,14 @@ def vista_dashboard(df, locations):
             paper_bgcolor="#EDEAE0",
             plot_bgcolor="#EDEAE0",
             font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=30, b=20, l=160, r=90),
-            height=max(320, len(cats) * 38),
+            margin=dict(t=30, b=20, l=180, r=110),
+            height=max(360, len(cats) * 42),
             legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0,
-                        font=dict(size=10), bgcolor="rgba(0,0,0,0)", traceorder="reversed"),
+                        font=dict(size=11), bgcolor="rgba(0,0,0,0)", traceorder="reversed"),
             xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
-                       tickprefix="$", tickformat=",.0f", tickfont=dict(size=9)),
-            yaxis=dict(showgrid=False, tickfont=dict(size=10, color="#1A1A14"), tickcolor="#1A1A14",
-                       categoryorder="array", categoryarray=cats),
+                       showticklabels=False),
+            yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14",
+                       categoryorder="array", categoryarray=cats_short),
         )
         st.plotly_chart(fig_val, use_container_width=True, config={"displayModeBar": False})
 
