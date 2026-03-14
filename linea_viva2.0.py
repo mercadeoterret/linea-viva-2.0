@@ -264,6 +264,11 @@ def check_google_login():
     if st.session_state.get("logged_in"):
         return
 
+    # Si viene callback de Shopify, no bloquear con login de Google
+    if st.query_params.get("state", "") == "lv7":
+        return
+
+
     client_id     = st.secrets.get("GOOGLE_CLIENT_ID", "")
     client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", "")
     redirect_uri  = st.secrets["REDIRECT_URI"]
