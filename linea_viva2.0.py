@@ -659,16 +659,25 @@ def vista_dashboard(df, locations):
         fig_pie = go.Figure(go.Pie(
             labels=[ESTADOS.get(e, {}).get("label", e) for e in seg["Estado"]],
             values=seg["N"],
-            hole=0.55,
+            hole=0.6,
             marker=dict(colors=[color_estado(e) for e in seg["Estado"]], line=dict(color="#F5F0E8", width=2)),
-            textinfo="label+percent",
-            textfont=dict(size=11),
-            hovertemplate="<b>%{label}</b><br>%{value} productos<br>%{percent}<extra></extra>",
+            textinfo="percent",
+            textfont=dict(size=12),
+            hovertemplate="<b>%{label}</b><br>%{value} productos · %{percent}<extra></extra>",
         ))
         fig_pie.update_layout(
-            **PLOT_BASE, height=280, showlegend=False,
+            **PLOT_BASE, height=340,
+            margin=dict(t=10, b=80, l=10, r=10),
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom", y=-0.35,
+                xanchor="center", x=0.5,
+                font=dict(size=11),
+                bgcolor="rgba(0,0,0,0)",
+            ),
             annotations=[dict(text=f"<b>{total_prods}</b><br>productos",
-                              x=0.5, y=0.5, font_size=15, showarrow=False,
+                              x=0.5, y=0.5, font_size=16, showarrow=False,
                               font=dict(color="#1A1A14"))],
         )
         st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
@@ -682,37 +691,53 @@ def vista_dashboard(df, locations):
         criticos = (
             df_view[df_view["_estado"] == "REPROGRAMAR"]
             .groupby("Producto")
-            .agg(dias_min=("DiasInv_n", "min"), stock_total=("Stock", "sum"))
+            .agg(
+                ventas=("Ventas60d", "sum"),
+                stock=("Stock", "sum"),
+                dias_min=("DiasInv_n", "min"),
+            )
             .reset_index()
-            .sort_values("dias_min")
+            .sort_values("ventas", ascending=False)
             .head(10)
         )
+        # Ordenar para el gráfico: mayor urgencia arriba = mayor ventas abajo (horizontal invertido)
+        criticos = criticos.sort_values("ventas", ascending=True)
+
         if criticos.empty:
             st.markdown(
                 "<div style='text-align:center;padding:60px;color:#6B6456;'>Sin productos críticos 🎉</div>",
                 unsafe_allow_html=True,
             )
         else:
+            # Texto: quiebre si stock=0, días si tiene algo de stock
+            def label_crit(row):
+                if row["stock"] == 0:
+                    return f"QUIEBRE · {int(row['ventas'])} u/60d"
+                return f"{int(row['dias_min'])}d · {int(row['ventas'])} u/60d"
+
             fig_crit = go.Figure(go.Bar(
-                x=criticos["dias_min"], y=criticos["Producto"], orientation="h",
-                marker=dict(color=criticos["dias_min"],
-                            colorscale=[[0, "#FF3B30"], [1, "#FFB800"]], showscale=False),
-                text=criticos["dias_min"].apply(lambda x: "QUIEBRE" if x == 0 else f"{int(x)}d"),
-                textposition="outside", textfont=dict(size=10),
-                hovertemplate="<b>%{y}</b><br>%{x:.0f} días<extra></extra>",
+                x=criticos["ventas"],
+                y=list(range(len(criticos))),
+                orientation="h",
+                marker=dict(
+                    color=criticos["stock"].apply(lambda s: "#FF3B30" if s == 0 else "#FFB800"),
+                    opacity=0.85,
+                ),
+                text=criticos.apply(label_crit, axis=1),
+                textposition="outside",
+                textfont=dict(size=9),
+                hovertemplate="<b>%{y}</b><br>%{x} u vendidas 60d<extra></extra>",
             ))
             fig_crit.update_layout(
-                **PLOT_BASE, height=310,
-                margin=dict(t=10, b=10, l=180, r=60),
-                xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False,
-                           range=[0, max(criticos["dias_min"].max() * 1.35, 35) if criticos["dias_min"].max() > 0 else 35]),
-                yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
-                shapes=[dict(type="line", x0=LEAD_TIME_DIAS, x1=LEAD_TIME_DIAS,
-                             y0=-0.5, y1=len(criticos) - 0.5,
-                             line=dict(color="#FF3B30", width=1, dash="dot"))],
-                annotations=[dict(x=LEAD_TIME_DIAS, y=len(criticos) - 0.5,
-                                  text="Lead time", showarrow=False,
-                                  font=dict(size=8, color="#CC2200"), xanchor="left")],
+                **PLOT_BASE, height=340,
+                margin=dict(t=10, b=10, l=10, r=150),
+                xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
+                           showticklabels=False),
+                yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True,
+                           tickmode="array",
+                           tickvals=list(range(len(criticos))),
+                           ticktext=[p[:28] + "..." if len(p) > 28 else p
+                                     for p in criticos["Producto"].tolist()]),
             )
             st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
 
@@ -734,7 +759,7 @@ def vista_dashboard(df, locations):
 
         if por_sku:
             top_data = df_view.sort_values("Ventas60d", ascending=True).tail(n_top)
-            y_v = (top_data["SKU"] + " · " + top_data["Variante"].str[:14]).tolist()
+            y_v = [(s + " · " + v)[:35] for s, v in zip(top_data["SKU"], top_data["Variante"].str[:14])]
             x_v = top_data["Ventas60d"].tolist()
             c_v = [color_estado(e) for e in top_data["_estado"]]
         else:
@@ -745,7 +770,7 @@ def vista_dashboard(df, locations):
                 .sort_values("Ventas60d", ascending=True)
                 .tail(n_top)
             )
-            y_v = top_data["Producto"].tolist()
+            y_v = [p[:32]+"..." if len(p)>32 else p for p in top_data["Producto"].tolist()]
             x_v = top_data["Ventas60d"].tolist()
             c_v = [color_estado(e) for e in top_data["_estado"]]
 
@@ -758,9 +783,9 @@ def vista_dashboard(df, locations):
         ))
         fig_top.update_layout(
             **PLOT_BASE, height=max(320, n_top * 32),
-            margin=dict(t=10, b=10, l=220, r=70),
+            margin=dict(t=10, b=10, l=10, r=70),
             xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+            yaxis=dict(showgrid=False, tickfont=dict(size=11), automargin=True),
         )
         st.plotly_chart(fig_top, use_container_width=True, config={"displayModeBar": False})
 
