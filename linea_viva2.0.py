@@ -731,7 +731,7 @@ def vista_dashboard(df, locations):
                 height=310,
                 xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False,
                            range=[0, criticos["ventas"].max() * 1.35]),
-                yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+                yaxis=dict(showgrid=False, tickfont=dict(size=10, color="#1A1A14"), tickcolor="#1A1A14"),
             )
             st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
 
@@ -791,7 +791,7 @@ def vista_dashboard(df, locations):
             margin=dict(t=10, b=10, l=240, r=70),
             height=max(340, n_top * 34),
             xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+            yaxis=dict(showgrid=False, tickfont=dict(size=10, color="#1A1A14"), tickcolor="#1A1A14"),
         )
         st.plotly_chart(fig_top, use_container_width=True, config={"displayModeBar": False})
 
@@ -827,10 +827,10 @@ def vista_dashboard(df, locations):
             paper_bgcolor="#EDEAE0",
             plot_bgcolor="#EDEAE0",
             font=dict(color="#1A1A14", family="DM Sans"),
-            margin=dict(t=10, b=10, l=10, r=80),
+            margin=dict(t=10, b=10, l=130, r=80),
             height=300,
             xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=9)),
+            yaxis=dict(showgrid=False, tickfont=dict(size=9, color="#1A1A14"), tickcolor="#1A1A14"),
         )
         st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
 
@@ -881,8 +881,8 @@ def vista_dashboard(df, locations):
                         font=dict(size=10), bgcolor="rgba(0,0,0,0)", traceorder="reversed"),
             xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False,
                        tickprefix="$", tickformat=",.0f", tickfont=dict(size=9)),
-            yaxis=dict(showgrid=False, tickfont=dict(size=10),
-                       automargin=False, categoryorder="array", categoryarray=cats),
+            yaxis=dict(showgrid=False, tickfont=dict(size=10, color="#1A1A14"), tickcolor="#1A1A14",
+                       categoryorder="array", categoryarray=cats),
         )
         st.plotly_chart(fig_val, use_container_width=True, config={"displayModeBar": False})
 
