@@ -1368,25 +1368,27 @@ def vista_rotacion(df):
         liq_ag["capital_liq"]       = liq_ag["stock"] * liq_ag["precio_liq"]
         capital_total = liq_ag["capital_liq"].sum()
 
-        # Gráfico de barras — capital por producto
-        liq_plot = liq_ag.sort_values("capital_liq", ascending=True).tail(15)
-        fig_liq = go.Figure(go.Bar(
-            x=liq_plot["capital_liq"],
-            y=liq_plot["Producto"].str[:35],
-            orientation="h",
-            marker=dict(color="#FF9500", opacity=0.85),
-            text=[fmt_pesos(v) for v in liq_plot["capital_liq"]],
-            textposition="outside",
-            textfont=dict(size=9),
-            hovertemplate="<b>%{y}</b><br>%{text}<br>%{x:.0f} u<extra></extra>",
-        ))
-        fig_liq.update_layout(
-            **PLOT_BASE, height=max(240, len(liq_plot) * 30),
-            margin=dict(t=10, b=10, l=220, r=90),
-            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+        liq_plot = liq_ag.sort_values("capital_liq", ascending=False).head(15)
+        max_liq = liq_plot["capital_liq"].max() or 1
+        liq_html = "".join(
+            f"<tr>"
+            f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
+            f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
+            f"<td style='padding:7px 8px;width:40%;'>"
+            f"<div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
+            f"<div style='background:#FF9500;width:{min(100,int(r['capital_liq']/max_liq*100))}%;height:16px;"
+            f"border-radius:3px;opacity:0.85;'></div></div></td>"
+            f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
+            f"color:#FF9500;text-align:right;white-space:nowrap;font-weight:600;'>{fmt_pesos(r['capital_liq'])}</td>"
+            f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
+            f"color:#6B6456;text-align:right;white-space:nowrap;'>{int(r['stock'])} u</td>"
+            f"</tr>"
+            for _, r in liq_plot.iterrows()
         )
-        st.plotly_chart(fig_liq, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            f"<table style='width:100%;border-collapse:collapse;'><tbody>{liq_html}</tbody></table>",
+            unsafe_allow_html=True,
+        )
 
         c1, c2, c3 = st.columns(3)
         with c1: st.metric("Productos a liquidar", len(liq_ag))
@@ -1446,39 +1448,45 @@ def vista_rotacion(df):
     rep_con = rep_ag[rep_ag["unids_posibles"] > 0].copy()
     rep_sin = rep_ag[rep_ag["unids_posibles"] == 0].copy()
 
-    # Gráfico: sugerido vs posible
     if not rep_con.empty:
-        rep_plot = rep_con.sort_values("costo_real", ascending=True)
-        fig_rep = go.Figure()
-        fig_rep.add_trace(go.Bar(
-            name="Posible reponer",
-            x=rep_plot["costo_real"],
-            y=rep_plot["Producto"].str[:35],
-            orientation="h",
-            marker=dict(color="#2D6A4F", opacity=0.9),
-            text=[f"{int(r.unids_posibles)} u · {fmt_pesos(r.costo_real)}" for _, r in rep_plot.iterrows()],
-            textposition="outside",
-            textfont=dict(size=9),
-            hovertemplate="<b>%{y}</b><br>%{text}<extra></extra>",
-        ))
-        fig_rep.add_trace(go.Bar(
-            name="Sugerido total",
-            x=rep_plot["costo_sug"],
-            y=rep_plot["Producto"].str[:35],
-            orientation="h",
-            marker=dict(color="#D4CFC4", opacity=0.5),
-            hovertemplate="<b>%{y}</b><br>Sugerido: $%{x:,.0f}<extra></extra>",
-        ))
-        fig_rep.update_layout(
-            barmode="overlay",
-            **PLOT_BASE,
-            height=max(280, len(rep_plot) * 32),
-            margin=dict(t=30, b=10, l=220, r=120),
-            legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0, font=dict(size=10)),
-            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, tickfont=dict(size=10), automargin=True),
+        rep_plot = rep_con.sort_values("costo_real", ascending=False)
+        max_sug = rep_plot["costo_sug"].max() or 1
+        # Leyenda
+        st.markdown(
+            "<div style='display:flex;gap:20px;margin-bottom:8px;font-size:12px;'>"
+            "<span style='display:flex;align-items:center;gap:6px;'>"
+            "<span style='display:inline-block;width:14px;height:14px;background:#2D6A4F;"
+            "border-radius:2px;'></span><span style='color:#1A1A14;'>Posible reponer</span></span>"
+            "<span style='display:flex;align-items:center;gap:6px;'>"
+            "<span style='display:inline-block;width:14px;height:14px;background:#D4CFC4;"
+            "border-radius:2px;'></span><span style='color:#1A1A14;'>Sugerido total</span></span>"
+            "</div>",
+            unsafe_allow_html=True,
         )
-        st.plotly_chart(fig_rep, use_container_width=True, config={"displayModeBar": False})
+        rep_html = "".join(
+            f"<tr>"
+            f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
+            f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
+            f"<td style='padding:7px 8px;width:40%;position:relative;'>"
+            f"<div style='background:#D4CFC4;border-radius:3px;height:18px;position:relative;'>"
+            f"<div style='background:#D4CFC4;width:{min(100,int(r['costo_sug']/max_sug*100))}%;height:18px;"
+            f"border-radius:3px;position:absolute;top:0;left:0;opacity:0.5;'></div>"
+            f"<div style='background:#2D6A4F;width:{min(100,int(r['costo_real']/max_sug*100))}%;height:18px;"
+            f"border-radius:3px;position:absolute;top:0;left:0;opacity:0.9;'></div>"
+            f"</div></td>"
+            f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
+            f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>"
+            f"{int(r['unids_posibles'])} u</td>"
+            f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
+            f"color:#1A1A14;text-align:right;white-space:nowrap;'>"
+            f"{fmt_pesos(r['costo_real'])}</td>"
+            f"</tr>"
+            for _, r in rep_plot.iterrows()
+        )
+        st.markdown(
+            f"<table style='width:100%;border-collapse:collapse;'><tbody>{rep_html}</tbody></table>",
+            unsafe_allow_html=True,
+        )
 
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.metric("Productos a reponer",  len(rep_con))
