@@ -1,16 +1,20 @@
 """
-Línea Viva v7 — Inventario Inteligente para Térret
+Línea Viva v8 — Inventario Inteligente para Térret
 Shopify Admin API (REST + GraphQL) directo — sin Google Sheets para inventario.
 OAuth Shopify integrado: si no hay token en secrets, la app misma hace el flujo.
+v8: Módulo de Gestión de SKUs + Barcodes agregado.
 """
 
 import math
+import re
+import random
 import uuid
 import urllib.parse
 import requests
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 # ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
@@ -29,6 +33,31 @@ LOCATIONS_VALIDAS = ["TERRET", "Tienda Fisica", "Tienda Móvil - Ferias"]
 DIAS_OBJETIVO  = 60
 MULTIPLO       = 6
 API_VERSION    = "2024-01"
+
+# ─── PREFIJOS SKU ─────────────────────────────────────────────────────────────
+PREFIX_MAP = {
+    "Bandana":                  "BAN",
+    "Bikers":                   "BKS",
+    "Buzo":                     "BUZ",
+    "Camiseta":                 "CAM",
+    "Cinturón":                 "CIN",
+    "Crop top":                 "CRT",
+    "Esqueleto":                "ESQ",
+    "Gift Cards":               "GFC",
+    "Hydratation Flask":        "HFL",
+    "Jersey Ciclismo":          "JRS",
+    "Leggings":                 "LEG",
+    "Manguillas":               "MAN",
+    "Medias de Compresión":     "MCO",
+    "Medias Tobilleras":        "MTO",
+    "Pantalonetas de Ciclismo": "PTC",
+    "Pantorrilleras":           "PNT",
+    "Short":                    "SHT",
+    "Top":                      "TOP",
+    "Trisuit":                  "TRI",
+    "Vestido de Baño":          "VBA",
+    "Visera":                   "VSR",
+}
 
 # ─── ESTILOS ──────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -98,29 +127,19 @@ section[data-testid="stSidebar"] .stButton > button:hover {
     font-size: 13px !important;
 }
 hr { border-color: #D4CFC4 !important; }
-
-/* Radio buttons y labels */
 [data-testid="stRadio"] label { color: #1A1A14 !important; }
 [data-testid="stRadio"] p { color: #1A1A14 !important; }
 [data-testid="stRadio"] span { color: #1A1A14 !important; }
 div[role="radiogroup"] label { color: #1A1A14 !important; }
 div[role="radiogroup"] p { color: #1A1A14 !important; }
-
-/* Selectbox y otros labels */
 [data-testid="stSelectbox"] label { color: #1A1A14 !important; }
 [data-testid="stSelectbox"] p { color: #1A1A14 !important; }
 label[data-testid="stWidgetLabel"] { color: #1A1A14 !important; }
 label[data-testid="stWidgetLabel"] p { color: #1A1A14 !important; }
-
-/* Toggle */
 [data-testid="stToggle"] label { color: #1A1A14 !important; }
 [data-testid="stToggle"] p { color: #1A1A14 !important; }
-
-/* Todos los párrafos en el body principal */
 [data-testid="stAppViewContainer"] p { color: #1A1A14 !important; }
 [data-testid="stAppViewContainer"] span { color: #1A1A14 !important; }
-
-/* Radio button circle colors */
 [data-baseweb="radio"] div { border-color: #2D6A4F !important; }
 [data-baseweb="radio"] [aria-checked="true"] div { background: #2D6A4F !important; }
 [data-testid="stDataFrame"] { background: #EDEAE0 !important; }
@@ -214,12 +233,6 @@ PLOT_BASE = dict(
 # ─── SHOPIFY OAUTH ────────────────────────────────────────────────────────────
 
 def shopify_get_token():
-    """
-    1) Secret SHOPIFY_ACCESS_TOKEN → úsalo directo.
-    2) session_state["shopify_token"] → ya hicimos OAuth esta sesión.
-    3) ?code=... en query params → intercambiar por token.
-    4) Nada → mostrar botón de autorización.
-    """
     token = st.secrets.get("SHOPIFY_ACCESS_TOKEN", "")
     if token:
         return token
@@ -307,7 +320,6 @@ def check_google_login():
     if st.session_state.get("logged_in"):
         return
 
-    # Si viene callback de Shopify, dejar pasar sin pedir login
     if st.query_params.get("state", "") == "lv7":
         return
 
@@ -514,7 +526,6 @@ def cargar_productos(_token):
 
 @st.cache_data(ttl=300)
 def cargar_stock(_token, _productos):
-    """Consulta inventory_levels por lotes de 50 inventory_item_ids."""
     all_iids = list({
         var["inventory_item_id"]
         for prod in _productos
@@ -542,14 +553,8 @@ def cargar_stock(_token, _productos):
 
 @st.cache_data(ttl=3600)
 def cargar_ventas_60d(_token, _locations):
-    """
-    Retorna:
-      ventas_global: {variant_id: total_qty}
-      ventas_por_loc: {variant_id: {loc_name: qty}}
-    location_id en la orden = punto de venta donde se procesó (igual que Apps Script)
-    """
     loc_id_to_name = {str(loc["id"]): loc["name"] for loc in _locations}
-    ONLINE = "TERRET"  # ventas sin location_id = canal online/bodega principal
+    ONLINE = "TERRET"
 
     desde = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     orders = rest_paginated(
@@ -604,7 +609,6 @@ def cargar_ventas_rango(_token, dias):
 
 
 def construir_df(productos, stock_map, ventas_map, locations):
-    """ventas_map = (ventas_global, ventas_por_loc)"""
     ventas_global, ventas_por_loc = ventas_map
     loc_id_to_name = {str(loc["id"]): loc["name"] for loc in locations}
     rows = []
@@ -638,15 +642,12 @@ def construir_df(productos, stock_map, ventas_map, locations):
                 "_inv_item_id": iid,
                 "_product_id":  prod["product_id"],
             }
-            # Stock por location
             for loc_id, loc_name in loc_id_to_name.items():
                 loc_data = loc_stocks.get(loc_id, {"available": 0, "on_hand": 0})
                 row[f"Stock_{loc_name}"]   = loc_data["available"]
                 row[f"Fisico_{loc_name}"]  = loc_data["on_hand"]
-            # Ventas por location
             for loc_name in loc_id_to_name.values():
                 row[f"Ventas_{loc_name}"] = v_por_loc.get(loc_name, 0)
-            # Ventas online (sin location_id)
             row["Ventas_TERRET"] = v_por_loc.get("TERRET", 0)
             rows.append(row)
 
@@ -684,6 +685,7 @@ def render_sidebar(conteos):
             ("VENTAS",     "📈  Ventas"),
             ("ROTACION",   "🔄  Rotación"),
             ("TENDENCIAS", "📉  Tendencias"),
+            ("SKU_MGR",    "🏷  Gestión de SKUs"),
         ]:
             if st.button(label, key=f"nav_{nav_id}"):
                 st.session_state.vista = nav_id
@@ -748,11 +750,10 @@ def vista_dashboard(df, locations):
         st.warning("Sin datos. Verifica la conexion con Shopify.")
         return
 
-    # ── Filtro de location ────────────────────────────────────────────────────
     loc_names = [loc["name"] for loc in locations]
     loc_cols  = [c for c in df.columns if c.startswith("Stock_")]
     df_view   = df.copy()
-    sel_loc   = "Todas las sucursales"  # default
+    sel_loc   = "Todas las sucursales"
 
     if loc_cols:
         loc_names_filtrados = [n for n in loc_names if n not in LOCATIONS_EXCLUIR]
@@ -765,9 +766,9 @@ def vista_dashboard(df, locations):
         usar_fisico = tipo_inv == "Físico"
 
         if sel_loc != "Todas las sucursales":
-            col_disp  = f"Stock_{sel_loc}"
+            col_disp   = f"Stock_{sel_loc}"
             col_fisico = f"Fisico_{sel_loc}"
-            col_usar  = col_fisico if usar_fisico else col_disp
+            col_usar   = col_fisico if usar_fisico else col_disp
             if col_usar in df_view.columns:
                 df_view["Stock"]        = df_view[col_usar].clip(lower=0)
                 df_view["DiasInv_n"]    = df_view.apply(
@@ -776,7 +777,6 @@ def vista_dashboard(df, locations):
                 df_view["_valor_costo"] = df_view["Stock"] * df_view["Costo"]
                 df_view["_valor_venta"] = df_view["Stock"] * df_view["Precio Venta"]
         else:
-            # Todas las sucursales: toggle disponible vs físico global
             if usar_fisico:
                 df_view["Stock"]        = df_view["StockFisico"]
                 df_view["DiasInv_n"]    = df_view.apply(
@@ -790,8 +790,6 @@ def vista_dashboard(df, locations):
     tiene_costos  = df_view["Costo"].sum() > 0
     tiene_precios = df_view["Precio Venta"].sum() > 0
 
-    # ── Metricas ──────────────────────────────────────────────────────────────
-    # Filtrar por sucursal para SKUs/Productos: solo los que tienen stock > 0 en la sucursal
     df_con_stock = df_view[df_view["Stock"] > 0] if sel_loc != "Todas las sucursales" else df_view
 
     total_skus  = len(df_con_stock)
@@ -801,16 +799,16 @@ def vista_dashboard(df, locations):
     vc          = df_view["_valor_costo"].sum()
     vv          = df_view["_valor_venta"].sum()
 
-    total_fisico    = int(df_view["StockFisico"].sum())
+    total_fisico       = int(df_view["StockFisico"].sum())
     total_comprometido = int(df_view["Comprometido"].sum())
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: st.metric("SKUs",             total_skus)
-    with c2: st.metric("Productos",        total_prods)
-    with c3: st.metric("Disponible",       f"{total_stock:,}")
-    with c4: st.metric("Comprometido",     f"{total_comprometido:,}",
+    with c1: st.metric("SKUs",          total_skus)
+    with c2: st.metric("Productos",     total_prods)
+    with c3: st.metric("Disponible",    f"{total_stock:,}")
+    with c4: st.metric("Comprometido",  f"{total_comprometido:,}",
                         help="Unidades reservadas en órdenes pendientes")
-    with c5: st.metric("A reprogramar",    reprog_n)
+    with c5: st.metric("A reprogramar", reprog_n)
 
     if tiene_costos or tiene_precios:
         c1, c2, c3 = st.columns(3)
@@ -820,7 +818,6 @@ def vista_dashboard(df, locations):
             mg = ((vv - vc) / vc * 100) if vc > 0 else 0
             st.metric("Margen potencial", f"{mg:.1f}%" if mg > 0 else "—")
 
-    # ── Desglose por sucursal (solo en vista "Todas") ─────────────────────────
     if sel_loc == "Todas las sucursales" and loc_cols:
         st.markdown(
             "<div style='font-family:Bebas Neue,sans-serif;font-size:12px;"
@@ -851,9 +848,8 @@ def vista_dashboard(df, locations):
                     unsafe_allow_html=True,
                 )
 
-    _seccion('VISIÓN GENERAL', 'Segmentos de inventario y productos críticos')
+    _seccion("VISIÓN GENERAL", "Segmentos de inventario y productos críticos")
 
-    # ── FILA 1: Pastel + Stock Critico ────────────────────────────────────────
     col_l, col_r = st.columns(2)
 
     with col_l:
@@ -937,9 +933,9 @@ def vista_dashboard(df, locations):
             st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-    _label_loc = f' · {sel_loc}' if sel_loc != 'Todas las sucursales' else ''
-    _seccion('TOP VENTAS 60D', f'Últimos 60 días{_label_loc}')
-    # ── FILA 2: Top Ventas (ancho completo) ──────────────────────────────────
+    _label_loc = f" · {sel_loc}" if sel_loc != "Todas las sucursales" else ""
+    _seccion("TOP VENTAS 60D", f"Últimos 60 días{_label_loc}")
+
     tc1, tc2, tc3 = st.columns([8, 1, 1])
     with tc1:
         pass
@@ -949,18 +945,15 @@ def vista_dashboard(df, locations):
     with tc3:
         vista_sku = st.toggle("Por SKU", key="toggle_top_sku", value=False)
 
-
-    if True:  # bloque unico para mantener indentacion
-
+    if True:
         if vista_sku:
-            top_data = df_view[["Producto","Variante","SKU","Ventas60d","_estado"]].copy()
+            top_data = df_view[["Producto", "Variante", "SKU", "Ventas60d", "_estado"]].copy()
             top_data = top_data.sort_values("Ventas60d", ascending=True).tail(n_top)
             top_data["etiqueta"] = top_data["SKU"] + "  " + top_data["Variante"].str[:18]
             y_vals  = top_data["etiqueta"].tolist()
             x_vals  = top_data["Ventas60d"].tolist()
             estados = top_data["_estado"].tolist()
         else:
-            # Si hay sucursal seleccionada, usar ventas de esa sucursal
             col_ventas = f"Ventas_{sel_loc}" if sel_loc != "Todas las sucursales" and f"Ventas_{sel_loc}" in df_view.columns else "Ventas60d"
 
             top_data = (
@@ -1004,11 +997,11 @@ def vista_dashboard(df, locations):
             unsafe_allow_html=True,
         )
 
-    _seccion('STOCK POR CATEGORÍA', 'Valor en inventario por línea de producto')
+    _seccion("STOCK POR CATEGORÍA", "Valor en inventario por línea de producto")
     por_tipo = (
         df_view[df_view["Tipo"].str.strip() != ""]
         .groupby("Tipo")
-        .agg(stock=("Stock","sum"), valor_costo=("_valor_costo","sum"), valor_venta=("_valor_venta","sum"))
+        .agg(stock=("Stock", "sum"), valor_costo=("_valor_costo", "sum"), valor_venta=("_valor_venta", "sum"))
         .reset_index()
         .sort_values("stock", ascending=True)
     )
@@ -1036,13 +1029,12 @@ def vista_dashboard(df, locations):
         unsafe_allow_html=True,
     )
 
-    # ── FILA 3: Valor de Inventario por Categoria ─────────────────────────────
     if tiene_costos or tiene_precios:
-        _seccion('VALOR DE INVENTARIO', 'Costo vs precio de venta · por categoría')
+        _seccion("VALOR DE INVENTARIO", "Costo vs precio de venta · por categoría")
         pv = (
             df_view[df_view["Tipo"].str.strip() != ""]
             .groupby("Tipo")
-            .agg(vc=("_valor_costo","sum"), vv=("_valor_venta","sum"))
+            .agg(vc=("_valor_costo", "sum"), vv=("_valor_venta", "sum"))
             .reset_index()
             .sort_values("vv", ascending=True)
         )
@@ -1052,7 +1044,6 @@ def vista_dashboard(df, locations):
         ventas = pv["vv"].tolist()
 
         max_vv = max(ventas) if ventas else 1
-        # Leyenda
         st.markdown(
             "<div style='display:flex;gap:20px;margin-bottom:8px;font-size:12px;'>"
             "<span style='display:flex;align-items:center;gap:6px;'>"
@@ -1087,7 +1078,7 @@ def vista_dashboard(df, locations):
             unsafe_allow_html=True,
         )
 
-    _seccion('RESUMEN POR SEGMENTO')
+    _seccion("RESUMEN POR SEGMENTO")
     resumen = []
     for estado in ORDEN_SIDEBAR:
         cfg = ESTADOS[estado]
@@ -1272,7 +1263,7 @@ def vista_ventas(token):
         unsafe_allow_html=True,
     )
 
-    rangos   = {"7 días": 7, "30 días": 30, "60 días": 60, "90 días": 90, "365 días": 365}
+    rangos    = {"7 días": 7, "30 días": 30, "60 días": 60, "90 días": 90, "365 días": 365}
     sel_rango = st.selectbox("Período", list(rangos.keys()), index=1)
     dias_sel  = rangos[sel_rango]
 
@@ -1316,7 +1307,6 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
-    # ── Top Productos — tabla HTML ancho completo ────────────────────────────
     _seccion("TOP PRODUCTOS", f"Por valor de venta · {sel_rango}")
     tp = (
         df_v.groupby("producto")
@@ -1346,7 +1336,6 @@ def vista_ventas(token):
         unsafe_allow_html=True,
     )
 
-    # ── Detalle por SKU — cards agrupados por producto ────────────────────────
     _seccion("DETALLE POR SKU", "Variantes ordenadas por unidades vendidas")
     det = (
         df_v.groupby(["producto", "sku", "variante"])
@@ -1357,7 +1346,6 @@ def vista_ventas(token):
     for prod, grupo in det.groupby("producto", sort=False):
         total_prod = grupo["total"].sum()
         unids_prod = int(grupo["unidades"].sum())
-        # Cabecera producto
         st.markdown(
             f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
             f"border-left:3px solid #2D6A4F;border-radius:6px 6px 0 0;"
@@ -1369,7 +1357,6 @@ def vista_ventas(token):
             f"</div>",
             unsafe_allow_html=True,
         )
-        # Filas de variantes
         rows_sku = "".join(
             f"<tr style='border-top:1px solid #D4CFC4;'>"
             f"<td style='padding:6px 14px;font-size:12px;color:#6B6456;"
@@ -1410,7 +1397,6 @@ def vista_rotacion(df):
     liq = df[df["_estado"] == "LIQUIDAR"].copy()
     rep = df[df["_estado"].isin(["REPROGRAMAR", "ESTRELLA", "ALTA_ROTACION"])].copy()
 
-    # ── PASO 1: Capital disponible en liquidación ──────────────────────────────
     st.markdown(
         "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
         "letter-spacing:2px;color:#FF9500;margin-bottom:8px;'>PASO 1 — CAPITAL INMOVILIZADO (LIQUIDAR)</div>",
@@ -1433,9 +1419,9 @@ def vista_rotacion(df):
             ventas=("Ventas60d", "sum"),
         ).reset_index()
         liq_ag = liq_ag[liq_ag["stock"] > 0].copy()
-        liq_ag["precio_liq"]        = liq_ag["precio"] * factor
-        liq_ag["valor_costo"]       = liq_ag["stock"] * liq_ag["costo"]
-        liq_ag["capital_liq"]       = liq_ag["stock"] * liq_ag["precio_liq"]
+        liq_ag["precio_liq"]  = liq_ag["precio"] * factor
+        liq_ag["valor_costo"] = liq_ag["stock"] * liq_ag["costo"]
+        liq_ag["capital_liq"] = liq_ag["stock"] * liq_ag["precio_liq"]
         capital_total = liq_ag["capital_liq"].sum()
 
         liq_plot = liq_ag.sort_values("capital_liq", ascending=False).head(15)
@@ -1467,7 +1453,6 @@ def vista_rotacion(df):
 
     st.markdown("<hr style='border-color:#D4CFC4;margin:24px 0;'>", unsafe_allow_html=True)
 
-    # ── PASO 2: Calculadora de reposición ─────────────────────────────────────
     st.markdown(
         "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
         "letter-spacing:2px;color:#2D6A4F;margin-bottom:8px;'>PASO 2 — ¿QUÉ REPONGO CON ESE CAPITAL?</div>",
@@ -1498,7 +1483,6 @@ def vista_rotacion(df):
     )
     rep_ag["costo_sug"] = rep_ag["sug_unids"] * rep_ag["costo"]
 
-    # Asignar presupuesto en orden de prioridad (mayor ventas primero)
     presupuesto_rest = float(presupuesto)
     rep_ag["unids_posibles"] = 0
     rep_ag["costo_real"]     = 0.0
@@ -1521,7 +1505,6 @@ def vista_rotacion(df):
     if not rep_con.empty:
         rep_plot = rep_con.sort_values("costo_real", ascending=False)
         max_sug = rep_plot["costo_sug"].max() or 1
-        # Leyenda
         st.markdown(
             "<div style='display:flex;gap:20px;margin-bottom:8px;font-size:12px;'>"
             "<span style='display:flex;align-items:center;gap:6px;'>"
@@ -1600,8 +1583,6 @@ def vista_tendencias(token):
     ant = df_t[(df_t["fecha"] >= inicio) & (df_t["fecha"] < corte)].groupby("producto")["cantidad"].sum()
 
     comp = pd.DataFrame({"reciente": rec, "anterior": ant}).fillna(0)
-
-    # Solo productos que vendieron en AMBOS períodos — eliminar ruido
     comp = comp[(comp["reciente"] >= 3) & (comp["anterior"] >= 3)].copy()
 
     comp["delta"] = comp["reciente"] - comp["anterior"]
@@ -1610,7 +1591,6 @@ def vista_tendencias(token):
     comp.columns = ["Producto", "Últimos 30d", "30d ant.", "Δ u", "Δ %"]
     comp = comp.sort_values("Δ %", ascending=False)
 
-    # ── Gráfico principal: acelerando vs desacelerando ────────────────────────
     top_crec = comp[comp["Δ %"] > 0].head(10)
     top_dec  = comp[comp["Δ %"] < 0].tail(10).sort_values("Δ %")
 
@@ -1687,14 +1667,12 @@ def vista_tendencias(token):
         unsafe_allow_html=True,
     )
 
-    # ── Evolución semanal ─────────────────────────────────────────────────────
     st.markdown(
         "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
         "letter-spacing:2px;color:#6B6456;margin:16px 0 6px 0;'>EVOLUCIÓN SEMANAL — DRILL DOWN</div>",
         unsafe_allow_html=True,
     )
 
-    # Por defecto mostrar los top 5 más vendidos en los últimos 30d
     top5 = df_t[df_t["fecha"] >= corte].groupby("producto")["cantidad"].sum().nlargest(5).index.tolist()
     prods_disp = sorted(df_t["producto"].unique().tolist())
     sel_prods  = st.multiselect("Seleccionar productos", prods_disp, default=top5[:3], key="sel_tend")
@@ -1718,7 +1696,6 @@ def vista_tendencias(token):
                 hovertemplate="<b>%{fullData.name}</b><br>Semana %{x|%d %b}<br>%{y} u<extra></extra>",
             ))
 
-        # Línea vertical en el corte 30d
         fig_ev.add_vline(
             x=corte.timestamp() * 1000,
             line=dict(color="#B8B0A4", width=1, dash="dot"),
@@ -1733,6 +1710,342 @@ def vista_tendencias(token):
             yaxis=dict(showgrid=True, gridcolor="#D4CFC4", tickfont=dict(size=9), title="Unidades"),
         )
         st.plotly_chart(fig_ev, use_container_width=True, config={"displayModeBar": False})
+
+
+# ─── MÓDULO 5: GESTIÓN DE SKUs ────────────────────────────────────────────────
+
+def _sku_format(prefix, n):
+    """Padding dinámico: 3 dígitos hasta 999, 4 desde 1000."""
+    if n >= 1000:
+        return f"{prefix}{n:04d}"
+    return f"{prefix}{n:03d}"
+
+
+def _ean13_generate(seed_str):
+    """Genera EAN-13 válido con dígito verificador correcto."""
+    random.seed(seed_str)
+    digits = [random.randint(0, 9) for _ in range(12)]
+    check = (10 - sum(d * (1 if i % 2 == 0 else 3) for i, d in enumerate(digits)) % 10) % 10
+    return "".join(map(str, digits)) + str(check)
+
+
+def _sku_fetch_all_products(token):
+    """Trae todos los productos activos con sus variantes (REST, paginado)."""
+    shop = st.secrets["TIENDA_URL"]
+    url = f"https://{shop}/admin/api/{API_VERSION}/products.json"
+    params = {"limit": 250, "fields": "id,title,product_type,variants", "status": "active"}
+    products = []
+    hdrs = _headers(token)
+    while url:
+        r = requests.get(url, headers=hdrs, params=params, timeout=30)
+        r.raise_for_status()
+        products.extend(r.json().get("products", []))
+        link = r.headers.get("Link", "")
+        url = None
+        params = {}
+        for part in link.split(","):
+            if 'rel="next"' in part:
+                url = part.split(";")[0].strip().strip("<>")
+    return products
+
+
+def _sku_compute_counters(products):
+    """Lee SKUs existentes y retorna el máximo consecutivo por prefijo."""
+    counters = defaultdict(int)
+    pattern = re.compile(r"^([A-Z]{3})(\d{3,4})$")
+    for p in products:
+        for v in p.get("variants", []):
+            sku = (v.get("sku") or "").strip().upper()
+            m = pattern.match(sku)
+            if m:
+                prefix, num = m.group(1), int(m.group(2))
+                counters[prefix] = max(counters[prefix], num)
+    return dict(counters)
+
+
+def _sku_collect_unassigned(products):
+    """Retorna variantes sin SKU con metadata del producto."""
+    result = []
+    for p in products:
+        ptype = p.get("product_type", "").strip()
+        prefix = PREFIX_MAP.get(ptype)
+        for v in p.get("variants", []):
+            sku = (v.get("sku") or "").strip()
+            barcode = (v.get("barcode") or "").strip()
+            if not sku:
+                result.append({
+                    "product_id":      str(p["id"]),
+                    "product_title":   p["title"],
+                    "product_type":    ptype,
+                    "prefix":          prefix,
+                    "variant_id":      str(v["id"]),
+                    "variant_title":   v.get("title", ""),
+                    "current_barcode": barcode,
+                })
+    return result
+
+
+def _sku_assign(unassigned, counters):
+    """Asigna SKU y barcode a cada variante sin SKU."""
+    local_counters = dict(counters)
+    assigned = []
+    seen_barcodes = set()
+    for row in unassigned:
+        prefix = row["prefix"]
+        if not prefix:
+            assigned.append({**row, "new_sku": None, "new_barcode": None,
+                              "error": f"Tipo sin prefijo configurado: '{row['product_type']}'"})
+            continue
+        local_counters[prefix] = local_counters.get(prefix, 0) + 1
+        n = local_counters[prefix]
+        new_sku = _sku_format(prefix, n)
+        if row["current_barcode"]:
+            new_barcode = row["current_barcode"]
+        else:
+            candidate = _ean13_generate(new_sku)
+            attempts = 0
+            while candidate in seen_barcodes and attempts < 20:
+                candidate = _ean13_generate(new_sku + str(attempts))
+                attempts += 1
+            new_barcode = candidate
+            seen_barcodes.add(new_barcode)
+        assigned.append({**row, "new_sku": new_sku, "new_barcode": new_barcode, "error": None})
+    return assigned
+
+
+def _sku_push_variant(token, variant_id, new_sku, new_barcode, has_barcode):
+    """Actualiza SKU (y opcionalmente barcode) de una variante en Shopify."""
+    shop = st.secrets["TIENDA_URL"]
+    url = f"https://{shop}/admin/api/{API_VERSION}/variants/{variant_id}.json"
+    payload = {"variant": {"id": int(variant_id), "sku": new_sku}}
+    if not has_barcode:
+        payload["variant"]["barcode"] = new_barcode
+    r = requests.put(url, headers=_headers(token), json=payload, timeout=15)
+    return r.status_code, r.json()
+
+
+def vista_sku_manager(token):
+    st.markdown(
+        "<div style='font-family:Bebas Neue,sans-serif;font-size:26px;"
+        "letter-spacing:3px;color:#1A1A14;margin-bottom:4px;'>GESTIÓN DE SKUs</div>"
+        "<div style='font-size:11px;color:#6B6456;letter-spacing:1px;"
+        "text-transform:uppercase;margin-bottom:20px;'>"
+        "Genera y sube SKU + barcode automáticamente · Solo variantes sin SKU asignado</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Paso 1: Escanear ──────────────────────────────────────────────────────
+    if st.button("🔍 ESCANEAR PRODUCTOS SIN SKU", key="btn_scan_sku"):
+        with st.spinner("Leyendo todos los productos de Shopify..."):
+            try:
+                products = _sku_fetch_all_products(token)
+                st.session_state["_sku_products"]   = products
+                st.session_state["_sku_counters"]   = _sku_compute_counters(products)
+                st.session_state["_sku_unassigned"] = _sku_collect_unassigned(products)
+                st.session_state["_sku_assigned"]   = None
+            except Exception as e:
+                st.error(f"Error al leer Shopify: {e}")
+                return
+
+    products   = st.session_state.get("_sku_products")
+    counters   = st.session_state.get("_sku_counters")
+    unassigned = st.session_state.get("_sku_unassigned")
+
+    if products is None:
+        st.markdown(
+            "<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-left:3px solid #4488FF;"
+            "border-radius:8px;padding:16px 20px;font-size:13px;color:#6B6456;'>"
+            "Presiona el botón para escanear todos los productos de Shopify. "
+            "El script leerá los SKUs existentes, calculará el consecutivo más alto "
+            "por tipo de producto, y te mostrará un preview antes de subir nada.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── Métricas del escaneo ──────────────────────────────────────────────────
+    total_variants = sum(len(p.get("variants", [])) for p in products)
+    total_products = len(products)
+    c1, c2, c3 = st.columns(3)
+    with c1: st.metric("Productos en Shopify", total_products)
+    with c2: st.metric("Variantes totales",    total_variants)
+    with c3: st.metric("Variantes sin SKU",    len(unassigned),
+                        delta=f"{'✅ Todo asignado' if len(unassigned) == 0 else f'{len(unassigned)} pendientes'}",
+                        delta_color="normal" if len(unassigned) > 0 else "off")
+
+    if not unassigned:
+        st.success("✅ Todos los productos y variantes ya tienen SKU asignado.")
+        return
+
+    # ── Estado de consecutivos actuales ──────────────────────────────────────
+    with st.expander("📊 Consecutivos actuales por prefijo", expanded=False):
+        if counters:
+            rows_cnt = sorted(counters.items())
+            cnt_html = "".join(
+                f"<tr>"
+                f"<td style='padding:6px 16px 6px 0;font-family:DM Mono,monospace;"
+                f"font-size:13px;color:#1A1A14;font-weight:500;'>{pfx}</td>"
+                f"<td style='padding:6px 0;font-size:13px;color:#6B6456;'>"
+                f"último: <span style='font-family:DM Mono,monospace;color:#2D6A4F;"
+                f"font-weight:600;'>{_sku_format(pfx, n)}</span>"
+                f"&nbsp;&nbsp;→&nbsp;&nbsp;siguiente: "
+                f"<span style='font-family:DM Mono,monospace;color:#FF9500;"
+                f"font-weight:600;'>{_sku_format(pfx, n+1)}</span></td>"
+                f"</tr>"
+                for pfx, n in rows_cnt
+            )
+            st.markdown(
+                f"<table style='border-collapse:collapse;'><tbody>{cnt_html}</tbody></table>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("No se encontraron SKUs con formato PREFIX+consecutivo. Se empezará desde 001 para cada tipo.")
+
+    # ── Paso 2: Preview ───────────────────────────────────────────────────────
+    if st.button("⚡ GENERAR PREVIEW DE SKUs", key="btn_preview_sku"):
+        assigned = _sku_assign(unassigned, counters)
+        st.session_state["_sku_assigned"] = assigned
+
+    assigned = st.session_state.get("_sku_assigned")
+    if assigned is None:
+        return
+
+    ok     = [a for a in assigned if not a["error"]]
+    errors = [a for a in assigned if a["error"]]
+
+    st.markdown(
+        f"<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
+        f"letter-spacing:2px;color:#2D6A4F;margin:20px 0 10px 0;'>"
+        f"PREVIEW — {len(ok)} variantes listas"
+        f"{'  ·  ' + str(len(errors)) + ' con error' if errors else ''}</div>",
+        unsafe_allow_html=True,
+    )
+
+    if errors:
+        with st.expander(f"⚠️ {len(errors)} variantes sin prefijo configurado", expanded=False):
+            for e in errors:
+                st.markdown(
+                    f"<div style='font-size:12px;color:#FF9500;padding:3px 0;'>"
+                    f"<b>{e['product_title']}</b> · {e['variant_title']} — {e['error']}</div>",
+                    unsafe_allow_html=True,
+                )
+
+    if ok:
+        df_prev = pd.DataFrame(ok)
+        df_prev = df_prev.sort_values(["product_type", "product_title", "new_sku"])
+
+        for ptype, grp_type in df_prev.groupby("product_type"):
+            pfx = PREFIX_MAP.get(ptype, "???")
+            st.markdown(
+                f"<div style='font-family:DM Mono,monospace;font-size:9px;letter-spacing:3px;"
+                f"color:#B8B0A4;text-transform:uppercase;padding:16px 0 6px 0;"
+                f"border-bottom:1px solid #D4CFC4;margin-bottom:6px;'>"
+                f"{ptype.upper()} · {pfx} · {len(grp_type)} variante(s)</div>",
+                unsafe_allow_html=True,
+            )
+            for prod, grp_prod in grp_type.groupby("product_title"):
+                header_html = (
+                    f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
+                    f"border-left:3px solid #2D6A4F;border-radius:8px 8px 0 0;"
+                    f"padding:10px 14px;display:flex;align-items:center;gap:10px;'>"
+                    f"<span style='font-weight:600;font-size:13px;flex:1;'>{prod}</span>"
+                    f"<span style='font-size:11px;color:#6B6456;'>{len(grp_prod)} variante(s)</span>"
+                    f"</div>"
+                )
+                thead = (
+                    "<thead><tr style='background:rgba(0,0,0,0.03);'>"
+                    "<th style='padding:5px 14px;font-size:9px;letter-spacing:1.5px;"
+                    "text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+                    "text-align:left;font-weight:400;'>VARIANTE</th>"
+                    "<th style='padding:5px 14px;font-size:9px;letter-spacing:1.5px;"
+                    "text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+                    "text-align:left;font-weight:400;'>NUEVO SKU</th>"
+                    "<th style='padding:5px 14px;font-size:9px;letter-spacing:1.5px;"
+                    "text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+                    "text-align:left;font-weight:400;'>BARCODE EAN-13</th>"
+                    "<th style='padding:5px 14px;font-size:9px;letter-spacing:1.5px;"
+                    "text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+                    "text-align:left;font-weight:400;'>BARCODE</th>"
+                    "</tr></thead>"
+                )
+                rows_html = "".join(
+                    f"<tr style='border-top:1px solid #D4CFC4;'>"
+                    f"<td style='padding:7px 14px;font-size:12px;color:#6B6456;"
+                    f"font-family:DM Sans,sans-serif;'>{r.variant_title}</td>"
+                    f"<td style='padding:7px 14px;font-family:DM Mono,monospace;font-size:13px;"
+                    f"color:#2D6A4F;font-weight:600;'>{r.new_sku}</td>"
+                    f"<td style='padding:7px 14px;font-family:DM Mono,monospace;font-size:12px;"
+                    f"color:#1A1A14;letter-spacing:1px;'>{r.new_barcode}</td>"
+                    f"<td style='padding:7px 14px;font-size:11px;"
+                    f"color:{'#B8B0A4' if r.current_barcode else '#4488FF'};'>"
+                    f"{'Existente (sin cambio)' if r.current_barcode else 'Generado'}</td>"
+                    f"</tr>"
+                    for r in grp_prod.itertuples()
+                )
+                st.markdown(
+                    header_html +
+                    f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-top:none;"
+                    f"border-left:3px solid #2D6A4F;border-radius:0 0 8px 8px;overflow:hidden;'>"
+                    f"<table style='width:100%;border-collapse:collapse;'>"
+                    f"{thead}<tbody>{rows_html}</tbody></table></div>"
+                    f"<div style='height:8px;'></div>",
+                    unsafe_allow_html=True,
+                )
+
+    # ── Paso 3: Confirmar y subir ─────────────────────────────────────────────
+    st.markdown("<hr style='border-color:#D4CFC4;margin:24px 0;'>", unsafe_allow_html=True)
+
+    if ok:
+        st.markdown(
+            "<div style='font-size:13px;color:#6B6456;margin-bottom:16px;'>"
+            "Revisa el preview antes de confirmar. "
+            "Esta acción escribe SKU y barcode en Shopify — no se puede deshacer automáticamente.</div>",
+            unsafe_allow_html=True,
+        )
+
+        col_btn1, col_btn2, _ = st.columns([2, 2, 4])
+        with col_btn1:
+            confirmar = st.button("✅ CONFIRMAR Y SUBIR A SHOPIFY", key="btn_confirm_sku")
+        with col_btn2:
+            if st.button("🔄 VOLVER A ESCANEAR", key="btn_rescan_sku"):
+                for k in ["_sku_products", "_sku_counters", "_sku_unassigned", "_sku_assigned"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+
+        if confirmar:
+            progress = st.progress(0, text="Subiendo SKUs a Shopify...")
+            res_ok, res_err, res_detalle = 0, 0, []
+
+            for i, a in enumerate(ok):
+                try:
+                    status, _ = _sku_push_variant(
+                        token, a["variant_id"], a["new_sku"], a["new_barcode"],
+                        bool(a["current_barcode"])
+                    )
+                    if status == 200:
+                        res_ok += 1
+                    else:
+                        res_err += 1
+                        res_detalle.append(f"{a['product_title']} / {a['variant_title']}: HTTP {status}")
+                except Exception as exc:
+                    res_err += 1
+                    res_detalle.append(f"{a['product_title']} / {a['variant_title']}: {exc}")
+                progress.progress((i + 1) / len(ok), text=f"Subiendo {i+1}/{len(ok)}...")
+
+            progress.empty()
+
+            if res_ok > 0:
+                st.success(f"✅ {res_ok} variantes actualizadas correctamente en Shopify.")
+            if res_err > 0:
+                st.error(f"❌ {res_err} errores al subir.")
+                for det in res_detalle[:10]:
+                    st.markdown(f"<div style='font-size:12px;color:#FF3B30;'>• {det}</div>",
+                                unsafe_allow_html=True)
+
+            # Limpiar estado y cache para reflejar cambios
+            for k in ["_sku_products", "_sku_counters", "_sku_unassigned", "_sku_assigned"]:
+                st.session_state.pop(k, None)
+            st.cache_data.clear()
+            st.rerun()
 
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
@@ -1779,12 +2092,14 @@ def main():
         vista_rotacion(df)
     elif vista == "TENDENCIAS":
         vista_tendencias(token)
+    elif vista == "SKU_MGR":
+        vista_sku_manager(token)
     elif vista in ESTADOS:
         vista_inventario(df, vista, locations)
 
     st.markdown(
         f"<div style='font-size:10px;color:#D4CFC4;text-align:right;margin-top:40px;'>"
-        f"LÍNEA VIVA v7 · TÉRRET · {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>",
+        f"LÍNEA VIVA v8 · TÉRRET · {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>",
         unsafe_allow_html=True,
     )
 
