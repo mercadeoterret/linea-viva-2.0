@@ -766,7 +766,6 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                   sku
                   quantity
                   originalUnitPriceSet { shopMoney { amount } }
-                  discountedUnitPriceSet { shopMoney { amount } }
                 }
               }
             }
@@ -796,8 +795,7 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                 qty  = int(li.get("quantity") or 0)
                 if qty <= 0:
                     continue
-                unit = float((li.get("originalUnitPriceSet")   or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                disc = float((li.get("discountedUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                unit = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 rows.append({
                     "fecha":    fecha,
                     "producto": li.get("title", ""),
@@ -805,7 +803,7 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                     "sku":      li.get("sku", ""),
                     "cantidad": qty,
                     "precio":   unit,
-                    "total":    disc * qty,
+                    "total":    unit * qty,
                 })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
@@ -1491,11 +1489,19 @@ def vista_ventas(token):
     unids = int(df_v["cantidad"].sum())
 
     c1, c2, c3 = st.columns(3)
-    with c1: st.metric("Ventas totales",        fmt_pesos(tot))
-    with c2: st.metric("Unidades vendidas",      f"{unids:,}")
-    with c3: st.metric("Ticket promedio unidad", fmt_pesos(tot / unids) if unids else "—")
+    with c1: st.metric("Ventas brutas",        fmt_pesos(tot))
+    with c2: st.metric("Unidades vendidas",    f"{unids:,}")
+    with c3: st.metric("Ticket promedio",      fmt_pesos(tot / unids) if unids else "—")
 
-    st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-left:3px solid #FFB800;"
+        "border-radius:6px;padding:10px 14px;margin:8px 0 16px 0;font-size:12px;color:#6B6456;'>"
+        "⚠️ <b>Ventas brutas</b> — precio original × unidades, sin descontar descuentos ni devoluciones. "
+        "El desfase respecto a Shopify (ventas netas/totales) es típicamente <b>5–15%</b> "
+        "según los descuentos aplicados en el período."
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     st.markdown(
         "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
@@ -1519,20 +1525,8 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
-    # ── DEBUG VERIFICACIÓN ────────────────────────────────────────────────────
-    with st.expander("🔍 Verificación — Top 20 productos (compara con Shopify)", expanded=False):
-        top_debug = (
-            df_v.groupby("producto")
-            .agg(unidades=("cantidad","sum"), total=("total","sum"))
-            .reset_index()
-            .sort_values("total", ascending=False)
-            .head(20)
-        )
-        top_debug["total_fmt"] = top_debug["total"].apply(fmt_pesos)
-        st.dataframe(top_debug[["producto","unidades","total_fmt"]].rename(columns={"total_fmt":"revenue"}),
-                     use_container_width=True, hide_index=True)
     # ── PARETO 80/20 ──────────────────────────────────────────────────────────
-    _seccion("PARETO 80 / 20", f"Qué productos generan el 80% del revenue · {sel_rango}")
+    _seccion("PARETO 80 / 20", f"Productos que generan el 80% de las ventas brutas · {sel_rango}")
 
     # Agregar por producto
     pareto = (
