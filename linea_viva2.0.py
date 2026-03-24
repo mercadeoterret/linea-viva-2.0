@@ -566,7 +566,7 @@ def cargar_ventas_60d(_token, _locations):
     desde = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     orders = rest_paginated(
         _token, "orders.json", "orders",
-        {"status": "any", "created_at_min": desde,
+        {"status": "open,closed", "created_at_min": desde,
          "fields": "id,location_id,cancelled_at,cancel_reason,financial_status,line_items", "limit": 250},
     )
     ventas_global  = {}
@@ -602,7 +602,7 @@ def cargar_ventas_rango(_token, dias):
     desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%dT%H:%M:%SZ")
     orders = rest_paginated(
         _token, "orders.json", "orders",
-        {"status": "any", "created_at_min": desde,
+        {"status": "open,closed", "created_at_min": desde,
          "fields": "id,created_at,cancelled_at,cancel_reason,financial_status,line_items",
          "limit": 250},
     )
