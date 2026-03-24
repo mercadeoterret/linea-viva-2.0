@@ -583,7 +583,13 @@ def cargar_ventas_60d(_token, _locations):
         loc_id   = str(order.get("location_id") or "")
         loc_name = loc_id_to_name.get(loc_id, ONLINE)
 
+        seen_line_ids = set()
         for item in order.get("line_items", []):
+            line_id = str(item.get("id", ""))
+            if line_id and line_id in seen_line_ids:
+                continue
+            if line_id:
+                seen_line_ids.add(line_id)
             vid = str(item.get("variant_id", ""))
             if not vid or vid == "None":
                 continue
@@ -614,7 +620,13 @@ def cargar_ventas_rango(_token, dias):
         if order.get("cancelled_at") or order.get("cancel_reason"):
             continue
         fecha = order.get("created_at", "")[:10]
+        seen_line_ids = set()
         for item in order.get("line_items", []):
+            line_id = str(item.get("id", ""))
+            if line_id and line_id in seen_line_ids:
+                continue
+            if line_id:
+                seen_line_ids.add(line_id)
             qty      = int(item.get("quantity", 0))
             prc      = float(item.get("price", 0) or 0)
             discount = float(item.get("total_discount", 0) or 0)
