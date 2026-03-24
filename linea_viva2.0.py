@@ -560,12 +560,19 @@ def cargar_ventas_60d(_token, _locations):
     orders = rest_paginated(
         _token, "orders.json", "orders",
         {"status": "any", "created_at_min": desde,
-         "fields": "id,location_id,line_items", "limit": 250},
+         "fields": "id,location_id,cancel_reason,financial_status,line_items", "limit": 250},
     )
     ventas_global  = {}
     ventas_por_loc = {}
 
     for order in orders:
+        # Excluir canceladas y no pagadas
+        if order.get("cancel_reason"):
+            continue
+        fin_status = order.get("financial_status", "")
+        if fin_status not in ("paid", "partially_paid", "partially_refunded", "refunded"):
+            continue
+
         loc_id   = str(order.get("location_id") or "")
         loc_name = loc_id_to_name.get(loc_id, ONLINE)
 
@@ -585,17 +592,29 @@ def cargar_ventas_60d(_token, _locations):
 @st.cache_data(ttl=3600)
 def cargar_ventas_rango(_token, dias):
     desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # status=any trae todas; filtramos canceladas manualmente para no perder
+    # órdenes parcialmente reembolsadas que sí tienen venta real.
     orders = rest_paginated(
         _token, "orders.json", "orders",
         {"status": "any", "created_at_min": desde,
-         "fields": "id,created_at,total_price,line_items", "limit": 250},
+         "fields": "id,created_at,cancel_reason,financial_status,line_items",
+         "limit": 250},
     )
     rows = []
     for order in orders:
+        # Excluir órdenes completamente canceladas
+        if order.get("cancel_reason"):
+            continue
+        # Solo órdenes con pago real (excluye pending, voided)
+        fin_status = order.get("financial_status", "")
+        if fin_status not in ("paid", "partially_paid", "partially_refunded", "refunded"):
+            continue
         fecha = order.get("created_at", "")[:10]
         for item in order.get("line_items", []):
-            qty = int(item.get("quantity", 0))
-            prc = float(item.get("price", 0) or 0)
+            qty      = int(item.get("quantity", 0))
+            prc      = float(item.get("price", 0) or 0)
+            discount = float(item.get("total_discount", 0) or 0)
+            neto     = max(0.0, qty * prc - discount)
             rows.append({
                 "fecha":    fecha,
                 "producto": item.get("title", ""),
@@ -603,7 +622,7 @@ def cargar_ventas_rango(_token, dias):
                 "sku":      item.get("sku", ""),
                 "cantidad": qty,
                 "precio":   prc,
-                "total":    qty * prc,
+                "total":    neto,
             })
     return pd.DataFrame(rows)
 
