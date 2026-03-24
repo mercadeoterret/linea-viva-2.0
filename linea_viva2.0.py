@@ -566,11 +566,8 @@ def cargar_ventas_60d(_token, _locations):
     ventas_por_loc = {}
 
     for order in orders:
-        # Excluir canceladas y no pagadas
+        # Solo excluir órdenes explícitamente canceladas
         if order.get("cancel_reason"):
-            continue
-        fin_status = order.get("financial_status", "")
-        if fin_status not in ("paid", "partially_paid", "partially_refunded", "refunded"):
             continue
 
         loc_id   = str(order.get("location_id") or "")
@@ -602,12 +599,8 @@ def cargar_ventas_rango(_token, dias):
     )
     rows = []
     for order in orders:
-        # Excluir órdenes completamente canceladas
+        # Solo excluir órdenes explícitamente canceladas
         if order.get("cancel_reason"):
-            continue
-        # Solo órdenes con pago real (excluye pending, voided)
-        fin_status = order.get("financial_status", "")
-        if fin_status not in ("paid", "partially_paid", "partially_refunded", "refunded"):
             continue
         fecha = order.get("created_at", "")[:10]
         for item in order.get("line_items", []):
