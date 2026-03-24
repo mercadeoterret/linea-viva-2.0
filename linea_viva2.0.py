@@ -578,6 +578,7 @@ def cargar_ventas_60d(_token, _locations):
                   id
                   quantity
                   currentQuantity
+                  nonFulfillableQuantity
                   variant { id }
                 }
               }
@@ -611,10 +612,11 @@ def cargar_ventas_60d(_token, _locations):
                 vid = variant.get("id", "").split("/")[-1]
                 if not vid:
                     continue
-                qty = int(li.get("currentQuantity") or li.get("quantity", 0))
-                if qty == 0:
+                qty_orig    = int(li.get("quantity", 0))
+                qty_nonfulf = int(li.get("nonFulfillableQuantity", 0))
+                qty = qty_orig - qty_nonfulf
+                if qty <= 0:
                     continue
-                # Sobreescribir siempre — la última es la más reciente
                 seen_vids[vid] = qty
 
             for vid, qty in seen_vids.items():
@@ -651,6 +653,7 @@ def cargar_ventas_rango(_token, dias):
                   sku
                   quantity
                   currentQuantity
+                  nonFulfillableQuantity
                   originalUnitPriceSet { shopMoney { amount } }
                   discountedUnitPriceSet { shopMoney { amount } }
                 }
@@ -677,13 +680,14 @@ def cargar_ventas_rango(_token, dias):
             variant_qtys = {}
             for li_edge in node.get("lineItems", {}).get("edges", []):
                 li = li_edge["node"]
-                qty = int(li.get("currentQuantity") or li.get("quantity", 0))
-                if qty == 0:
+                qty_orig    = int(li.get("quantity", 0))
+                qty_nonfulf = int(li.get("nonFulfillableQuantity", 0))
+                qty = qty_orig - qty_nonfulf
+                if qty <= 0:
                     continue
                 key = (li.get("title", ""), li.get("variantTitle", ""))
                 prc  = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 disc = float((li.get("discountedUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                # Sobreescribir siempre — la última aparición es la más reciente
                 variant_qtys[key] = {
                     "fecha":    fecha,
                     "producto": li.get("title", ""),
