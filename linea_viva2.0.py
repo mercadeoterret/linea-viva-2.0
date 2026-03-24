@@ -957,7 +957,7 @@ def _seccion(titulo, subtitulo=""):
     )
 
 
-def vista_dashboard(df, locations):
+def vista_dashboard(df, locations, token):
     st.markdown(
         "<div style='font-family:Bebas Neue,sans-serif;font-size:26px;"
         "letter-spacing:3px;color:#1A1A14;margin-bottom:4px;'>DASHBOARD</div>"
@@ -2656,7 +2656,7 @@ def main():
     vista = st.session_state.get("vista", "DASHBOARD")
 
     if vista == "DASHBOARD":
-        vista_dashboard(df, locations)
+        vista_dashboard(df, locations, token)
     elif vista == "VENTAS":
         vista_ventas(token)
     elif vista == "ROTACION":
