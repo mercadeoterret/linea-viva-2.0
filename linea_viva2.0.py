@@ -560,14 +560,14 @@ def cargar_ventas_60d(_token, _locations):
     orders = rest_paginated(
         _token, "orders.json", "orders",
         {"status": "any", "created_at_min": desde,
-         "fields": "id,location_id,cancel_reason,financial_status,line_items", "limit": 250},
+         "fields": "id,location_id,cancelled_at,cancel_reason,financial_status,line_items", "limit": 250},
     )
     ventas_global  = {}
     ventas_por_loc = {}
 
     for order in orders:
-        # Solo excluir órdenes explícitamente canceladas
-        if order.get("cancel_reason"):
+        # Excluir órdenes canceladas (cancelled_at es más confiable que cancel_reason)
+        if order.get("cancelled_at") or order.get("cancel_reason"):
             continue
 
         loc_id   = str(order.get("location_id") or "")
@@ -594,13 +594,13 @@ def cargar_ventas_rango(_token, dias):
     orders = rest_paginated(
         _token, "orders.json", "orders",
         {"status": "any", "created_at_min": desde,
-         "fields": "id,created_at,cancel_reason,financial_status,line_items",
+         "fields": "id,created_at,cancelled_at,cancel_reason,financial_status,line_items",
          "limit": 250},
     )
     rows = []
     for order in orders:
-        # Solo excluir órdenes explícitamente canceladas
-        if order.get("cancel_reason"):
+        # Excluir órdenes canceladas (cancelled_at es más confiable que cancel_reason)
+        if order.get("cancelled_at") or order.get("cancel_reason"):
             continue
         fecha = order.get("created_at", "")[:10]
         for item in order.get("line_items", []):
