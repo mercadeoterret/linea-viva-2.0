@@ -630,68 +630,56 @@ def cargar_ventas_60d(_token, _locations):
 
 
 def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
-    """Usa ShopifyQL (API de reportes) para obtener exactamente los mismos
-    números que muestra el dashboard de Shopify."""
+    """Usa ShopifyQL directamente — mismos números que el dashboard de Shopify."""
     desde_str = fecha_desde.strftime("%Y-%m-%d")
     hasta_str = fecha_hasta.strftime("%Y-%m-%d")
 
-    shopify_ql = f"""
-    FROM sales
-    SHOW product_title, net_sales, total_sales, quantity_ordered
-    GROUP BY product_title
-    SINCE {desde_str}
-    UNTIL {hasta_str}
-    ORDER BY total_sales DESC
-    LIMIT 500
-    """
+    shopify_ql = (
+        f"FROM sales, discounts, inventory "
+        f"SHOW product_title, day, total_sales, quantity_ordered "
+        f"GROUP BY product_title, day "
+        f"SINCE {desde_str} UNTIL {hasta_str} "
+        f"ORDER BY total_sales DESC LIMIT 500"
+    )
 
     GQL = """
-    mutation runReport($query: String!) {
-      queryRoot {
-        reportingQuery(shopifyql: $query) {
-          ... on ReportingQueryResult {
-            parseStatus {
-              queryString
-              status
-            }
-            tableData {
-              rowData
-              columns {
-                name
-                dataType
-                displayName
-              }
-            }
+    query($query: String!) {
+      shopifyqlQuery(query: $query) {
+        __typename
+        ... on TableResponse {
+          tableData {
+            unformattedData
+            columns { name dataType }
           }
-          ... on ParseError {
-            code
-            message
-            range { start { line column } end { line column } }
-          }
+        }
+        ... on ParseErrorResponse {
+          parseErrors { code message range { start { line column } end { line column } } }
         }
       }
     }
     """
-    # ShopifyQL usa un endpoint diferente
-    shop    = st.secrets["TIENDA_URL"]
-    url     = f"https://{shop}/admin/api/{API_VERSION}/graphql.json"
-    headers = _headers(_token)
-
-    resp = requests.post(url, headers=headers,
-                         json={"query": GQL, "variables": {"query": shopify_ql}},
-                         timeout=60)
+    shop = st.secrets["TIENDA_URL"]
+    resp = requests.post(
+        f"https://{shop}/admin/api/{API_VERSION}/graphql.json",
+        headers=_headers(_token),
+        json={"query": GQL, "variables": {"query": shopify_ql}},
+        timeout=60,
+    )
     resp.raise_for_status()
     data = resp.json()
 
-    # Si ShopifyQL no disponible, fallback a REST
-    errors = data.get("errors") or []
-    reporting = ((data.get("data") or {}).get("queryRoot") or {}).get("reportingQuery") or {}
-    table = reporting.get("tableData") or {}
-    columns = [c["name"] for c in (table.get("columns") or [])]
-    rows_raw = table.get("rowData") or []
+    result = (data.get("data") or {}).get("shopifyqlQuery") or {}
+    typename = result.get("__typename", "")
 
-    if not rows_raw or errors:
-        # Fallback: usar REST con campos básicos
+    if typename != "TableResponse":
+        # ShopifyQL no disponible en este plan — fallback a REST
+        return _cargar_ventas_rest(_token, fecha_desde, fecha_hasta)
+
+    table   = result.get("tableData") or {}
+    columns = [c["name"] for c in (table.get("columns") or [])]
+    rows_raw = table.get("unformattedData") or []
+
+    if not rows_raw:
         return _cargar_ventas_rest(_token, fecha_desde, fecha_hasta)
 
     rows = []
@@ -700,7 +688,7 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
             continue
         rec = dict(zip(columns, row))
         rows.append({
-            "fecha":    desde_str,
+            "fecha":    str(rec.get("day", desde_str))[:10],
             "producto": str(rec.get("product_title", "")),
             "variante": "",
             "sku":      "",
