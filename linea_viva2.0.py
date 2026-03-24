@@ -633,8 +633,9 @@ def cargar_ventas_60d(_token, _locations):
 
 
 
-def cargar_ventas_rango(_token, dias):
-    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
+    desde  = fecha_desde.strftime("%Y-%m-%dT00:00:00Z")
+    hasta  = fecha_hasta.strftime("%Y-%m-%dT23:59:59Z")
     GQL = """
     query($cursor: String, $query: String) {
       orders(first: 250, after: $cursor, query: $query) {
@@ -664,7 +665,7 @@ def cargar_ventas_rango(_token, dias):
       }
     }
     """
-    query_str = f"created_at:>={desde}"
+    query_str = f"created_at:>={desde} created_at:<={hasta}"
     rows = []
     cursor = None
 
@@ -1360,12 +1361,19 @@ def vista_ventas(token):
         unsafe_allow_html=True,
     )
 
-    rangos    = {"7 días": 7, "30 días": 30, "60 días": 60, "90 días": 90, "365 días": 365}
-    sel_rango = st.selectbox("Período", list(rangos.keys()), index=1)
-    dias_sel  = rangos[sel_rango]
+    hoy         = datetime.now().date()
+    fecha_desde = st.date_input("Desde", value=hoy - timedelta(days=30), max_value=hoy, key="ventas_desde")
+    fecha_hasta = st.date_input("Hasta", value=hoy, max_value=hoy, key="ventas_hasta")
+
+    if fecha_desde > fecha_hasta:
+        st.error("La fecha de inicio debe ser anterior a la fecha final.")
+        return
+
+    sel_rango = f"{fecha_desde.strftime('%d/%m/%Y')} → {fecha_hasta.strftime('%d/%m/%Y')}"
+    dias_sel  = (fecha_hasta - fecha_desde).days + 1
 
     with st.spinner("Cargando ventas..."):
-        df_v = cargar_ventas_rango(token, dias_sel)
+        df_v = cargar_ventas_rango(token, fecha_desde, fecha_hasta)
 
     if df_v.empty:
         st.info("Sin ventas en el período.")
@@ -1929,7 +1937,9 @@ def vista_tendencias(token):
     )
 
     with st.spinner("Cargando 90 días de ventas..."):
-        df_t = cargar_ventas_rango(token, 90)
+        hoy_t   = datetime.now().date()
+        desde_t = hoy_t - timedelta(days=90)
+        df_t = cargar_ventas_rango(token, desde_t, hoy_t)
 
     if df_t.empty:
         st.info("Sin datos de ventas.")
