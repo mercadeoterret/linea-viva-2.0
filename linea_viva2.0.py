@@ -432,10 +432,17 @@ def rest_paginated(token, endpoint, key, params=None):
     results = []
     p       = dict(params or {})
     p.setdefault("limit", 250)
+    seen_ids = set()
     while url:
         resp = requests.get(url, headers=_headers(token), params=p, timeout=30)
         resp.raise_for_status()
-        results.extend(resp.json().get(key, []))
+        for item in resp.json().get(key, []):
+            item_id = item.get("id")
+            if item_id and item_id in seen_ids:
+                continue
+            if item_id:
+                seen_ids.add(item_id)
+            results.append(item)
         link = resp.headers.get("Link", "")
         url  = None
         p    = {}
