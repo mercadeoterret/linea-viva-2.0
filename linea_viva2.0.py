@@ -2,7 +2,7 @@
 Línea Viva v8 — Inventario Inteligente para Térret
 Shopify Admin API (REST + GraphQL) directo — sin Google Sheets para inventario.
 OAuth Shopify integrado: si no hay token en secrets, la app misma hace el flujo.
-v8: Módulo de Gestión de SKUs + Barcodes agregado.
+v8: Módulo de Gestión de SKUs + Barcodes + Análisis Pareto 80/20.
 """
 
 import math
@@ -284,7 +284,7 @@ def shopify_get_token():
         st.query_params.clear()
         st.stop()
 
-    scopes   = "read_products,read_inventory,read_locations,read_orders"
+    scopes   = "read_products,read_inventory,read_locations,read_orders,write_products"
     auth_url = (
         f"https://{shop}/admin/oauth/authorize"
         f"?client_id={client_id}"
@@ -1307,6 +1307,258 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
+    # ── PARETO 80/20 ──────────────────────────────────────────────────────────
+    _seccion("PARETO 80 / 20", f"Qué productos generan el 80% del revenue · {sel_rango}")
+
+    # Agregar por producto
+    pareto = (
+        df_v.groupby("producto")
+        .agg(total=("total", "sum"), unidades=("cantidad", "sum"))
+        .reset_index()
+        .sort_values("total", ascending=False)
+        .reset_index(drop=True)
+    )
+    pareto["acum_pct"]  = pareto["total"].cumsum() / pareto["total"].sum() * 100
+    pareto["rank"]      = range(1, len(pareto) + 1)
+    pareto["prod_pct"]  = pareto["rank"] / len(pareto) * 100
+
+    # Calcular corte 80%
+    corte_idx   = int((pareto["acum_pct"] <= 80).sum())
+    n_total     = len(pareto)
+    n_vitales   = max(corte_idx, 1)
+    n_triviales = n_total - n_vitales
+    pct_prods   = round(n_vitales / n_total * 100, 1)
+    rev_vitales = pareto.iloc[:n_vitales]["total"].sum()
+    rev_total   = pareto["total"].sum()
+
+    # Métricas resumen
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Productos vitales (80%)", n_vitales,
+                  help="Generan el 80% del revenue")
+    with c2:
+        st.metric("% del catálogo", f"{pct_prods}%",
+                  help=f"{n_vitales} de {n_total} productos")
+    with c3:
+        st.metric("Productos triviales (20%)", n_triviales,
+                  help="El resto del catálogo")
+    with c4:
+        st.metric("Revenue vitales", fmt_pesos(rev_vitales))
+
+    # Gráfico Pareto: barras + línea acumulada
+    colores_bar = [
+        "#2D6A4F" if i < n_vitales else "#D4CFC4"
+        for i in range(len(pareto))
+    ]
+    labels_short = [
+        (p[:28] + "…" if len(p) > 28 else p)
+        for p in pareto["producto"].tolist()
+    ]
+
+    fig_pareto = go.Figure()
+
+    # Barras de revenue por producto
+    fig_pareto.add_trace(go.Bar(
+        x=list(range(len(pareto))),
+        y=pareto["total"].tolist(),
+        marker_color=colores_bar,
+        marker_opacity=0.85,
+        name="Revenue",
+        hovertemplate="<b>%{customdata}</b><br>$%{y:,.0f}<extra></extra>",
+        customdata=pareto["producto"].tolist(),
+        yaxis="y1",
+    ))
+
+    # Línea acumulada %
+    fig_pareto.add_trace(go.Scatter(
+        x=list(range(len(pareto))),
+        y=pareto["acum_pct"].tolist(),
+        mode="lines",
+        line=dict(color="#FF9500", width=2),
+        name="Acumulado %",
+        hovertemplate="%{y:.1f}%<extra></extra>",
+        yaxis="y2",
+    ))
+
+    # Línea de corte 80%
+    fig_pareto.add_hline(
+        y=80, line_dash="dot",
+        line_color="#FF3B30", line_width=1.5,
+        annotation_text="80%",
+        annotation_font_size=10,
+        annotation_font_color="#FF3B30",
+        yref="y2",
+    )
+
+    # Línea vertical en el corte
+    if n_vitales < len(pareto):
+        fig_pareto.add_vline(
+            x=n_vitales - 0.5,
+            line_dash="dot",
+            line_color="#FF3B30",
+            line_width=1,
+        )
+
+    fig_pareto.update_layout(
+        **PLOT_BASE,
+        height=340,
+        margin=dict(t=20, b=60, l=70, r=60),
+        showlegend=False,
+        bargap=0.15,
+        xaxis=dict(
+            showgrid=False,
+            showticklabels=False,
+            zeroline=False,
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor="#D4CFC4",
+            tickprefix="$",
+            tickformat=",.0f",
+            tickfont=dict(size=9),
+            title=None,
+        ),
+        yaxis2=dict(
+            overlaying="y",
+            side="right",
+            range=[0, 105],
+            ticksuffix="%",
+            tickfont=dict(size=9),
+            showgrid=False,
+            title=None,
+        ),
+        annotations=[
+            dict(
+                x=n_vitales / 2,
+                y=-0.18,
+                xref="x",
+                yref="paper",
+                text=f"◀ {n_vitales} vitales · {pct_prods}% del catálogo",
+                showarrow=False,
+                font=dict(size=10, color="#2D6A4F"),
+                xanchor="center",
+            ),
+            dict(
+                x=(n_vitales + n_total) / 2,
+                y=-0.18,
+                xref="x",
+                yref="paper",
+                text=f"{n_triviales} triviales ▶",
+                showarrow=False,
+                font=dict(size=10, color="#B8B0A4"),
+                xanchor="center",
+            ),
+        ],
+    )
+    st.plotly_chart(fig_pareto, use_container_width=True, config={"displayModeBar": False})
+
+    # Tabla de productos vitales
+    col_v, col_t = st.columns(2)
+
+    with col_v:
+        st.markdown(
+            f"<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
+            f"letter-spacing:2px;color:#2D6A4F;margin-bottom:8px;'>"
+            f"VITALES — {n_vitales} productos · 80% del revenue</div>",
+            unsafe_allow_html=True,
+        )
+        vitales = pareto.iloc[:n_vitales].copy()
+        max_v   = vitales["total"].max() or 1
+        v_html  = "".join(
+            f"<tr>"
+            f"<td style='padding:5px 10px 5px 0;font-size:11px;color:#6B6456;"
+            f"font-family:DM Mono,monospace;'>{int(r['rank'])}</td>"
+            f"<td style='padding:5px 10px;font-size:12px;font-weight:500;color:#1A1A14;"
+            f"font-family:DM Sans,sans-serif;'>{r['producto'][:34]}</td>"
+            f"<td style='padding:5px 0;width:30%;'>"
+            f"<div style='background:#D4CFC4;border-radius:2px;height:12px;'>"
+            f"<div style='background:#2D6A4F;width:{int(r['total']/max_v*100)}%;height:12px;"
+            f"border-radius:2px;opacity:0.85;'></div></div></td>"
+            f"<td style='padding:5px 0 5px 8px;font-family:DM Mono,monospace;font-size:11px;"
+            f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>"
+            f"{fmt_pesos(r['total'])}</td>"
+            f"<td style='padding:5px 0 5px 6px;font-family:DM Mono,monospace;font-size:10px;"
+            f"color:#B8B0A4;text-align:right;white-space:nowrap;'>"
+            f"{r['acum_pct']:.1f}%</td>"
+            f"</tr>"
+            for _, r in vitales.iterrows()
+        )
+        st.markdown(
+            f"<table style='width:100%;border-collapse:collapse;'>"
+            f"<thead><tr>"
+            f"<th style='padding:4px 10px 4px 0;font-size:9px;letter-spacing:1.5px;"
+            f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+            f"text-align:left;font-weight:400;'>#</th>"
+            f"<th style='padding:4px 10px;font-size:9px;letter-spacing:1.5px;"
+            f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+            f"text-align:left;font-weight:400;'>PRODUCTO</th>"
+            f"<th colspan='2' style='padding:4px 0;font-size:9px;letter-spacing:1.5px;"
+            f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+            f"text-align:left;font-weight:400;'>REVENUE</th>"
+            f"<th style='padding:4px 0 4px 6px;font-size:9px;letter-spacing:1.5px;"
+            f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+            f"text-align:right;font-weight:400;'>ACUM.</th>"
+            f"</tr></thead>"
+            f"<tbody>{v_html}</tbody></table>",
+            unsafe_allow_html=True,
+        )
+
+    with col_t:
+        st.markdown(
+            f"<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
+            f"letter-spacing:2px;color:#B8B0A4;margin-bottom:8px;'>"
+            f"TRIVIALES — {n_triviales} productos · 20% del revenue</div>",
+            unsafe_allow_html=True,
+        )
+        triviales = pareto.iloc[n_vitales:].copy()
+        if triviales.empty:
+            st.markdown(
+                "<div style='font-size:12px;color:#B8B0A4;padding:20px 0;'>"
+                "Sin productos en esta categoría.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            max_t  = triviales["total"].max() or 1
+            t_html = "".join(
+                f"<tr>"
+                f"<td style='padding:5px 10px 5px 0;font-size:11px;color:#B8B0A4;"
+                f"font-family:DM Mono,monospace;'>{int(r['rank'])}</td>"
+                f"<td style='padding:5px 10px;font-size:12px;color:#6B6456;"
+                f"font-family:DM Sans,sans-serif;'>{r['producto'][:34]}</td>"
+                f"<td style='padding:5px 0;width:30%;'>"
+                f"<div style='background:#D4CFC4;border-radius:2px;height:12px;'>"
+                f"<div style='background:#B8B0A4;width:{int(r['total']/max_t*100)}%;height:12px;"
+                f"border-radius:2px;opacity:0.6;'></div></div></td>"
+                f"<td style='padding:5px 0 5px 8px;font-family:DM Mono,monospace;font-size:11px;"
+                f"color:#6B6456;text-align:right;white-space:nowrap;'>"
+                f"{fmt_pesos(r['total'])}</td>"
+                f"<td style='padding:5px 0 5px 6px;font-family:DM Mono,monospace;font-size:10px;"
+                f"color:#B8B0A4;text-align:right;white-space:nowrap;'>"
+                f"{r['acum_pct']:.1f}%</td>"
+                f"</tr>"
+                for _, r in triviales.iterrows()
+            )
+            st.markdown(
+                f"<table style='width:100%;border-collapse:collapse;'>"
+                f"<thead><tr>"
+                f"<th style='padding:4px 10px 4px 0;font-size:9px;letter-spacing:1.5px;"
+                f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+                f"text-align:left;font-weight:400;'>#</th>"
+                f"<th style='padding:4px 10px;font-size:9px;letter-spacing:1.5px;"
+                f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+                f"text-align:left;font-weight:400;'>PRODUCTO</th>"
+                f"<th colspan='2' style='padding:4px 0;font-size:9px;letter-spacing:1.5px;"
+                f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+                f"text-align:left;font-weight:400;'>REVENUE</th>"
+                f"<th style='padding:4px 0 4px 6px;font-size:9px;letter-spacing:1.5px;"
+                f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
+                f"text-align:right;font-weight:400;'>ACUM.</th>"
+                f"</tr></thead>"
+                f"<tbody>{t_html}</tbody></table>",
+                unsafe_allow_html=True,
+            )
+
+    # ── TOP PRODUCTOS (existente) ──────────────────────────────────────────────
     _seccion("TOP PRODUCTOS", f"Por valor de venta · {sel_rango}")
     tp = (
         df_v.groupby("producto")
@@ -1834,7 +2086,6 @@ def vista_sku_manager(token):
         unsafe_allow_html=True,
     )
 
-    # ── Paso 1: Escanear ──────────────────────────────────────────────────────
     if st.button("🔍 ESCANEAR PRODUCTOS SIN SKU", key="btn_scan_sku"):
         with st.spinner("Leyendo todos los productos de Shopify..."):
             try:
@@ -1862,7 +2113,6 @@ def vista_sku_manager(token):
         )
         return
 
-    # ── Métricas del escaneo ──────────────────────────────────────────────────
     total_variants = sum(len(p.get("variants", [])) for p in products)
     total_products = len(products)
     c1, c2, c3 = st.columns(3)
@@ -1876,7 +2126,6 @@ def vista_sku_manager(token):
         st.success("✅ Todos los productos y variantes ya tienen SKU asignado.")
         return
 
-    # ── Estado de consecutivos actuales ──────────────────────────────────────
     with st.expander("📊 Consecutivos actuales por prefijo", expanded=False):
         if counters:
             rows_cnt = sorted(counters.items())
@@ -1900,7 +2149,6 @@ def vista_sku_manager(token):
         else:
             st.info("No se encontraron SKUs con formato PREFIX+consecutivo. Se empezará desde 001 para cada tipo.")
 
-    # ── Paso 2: Preview ───────────────────────────────────────────────────────
     if st.button("⚡ GENERAR PREVIEW DE SKUs", key="btn_preview_sku"):
         assigned = _sku_assign(unassigned, counters)
         st.session_state["_sku_assigned"] = assigned
@@ -1991,7 +2239,6 @@ def vista_sku_manager(token):
                     unsafe_allow_html=True,
                 )
 
-    # ── Paso 3: Confirmar y subir ─────────────────────────────────────────────
     st.markdown("<hr style='border-color:#D4CFC4;margin:24px 0;'>", unsafe_allow_html=True)
 
     if ok:
@@ -2041,7 +2288,6 @@ def vista_sku_manager(token):
                     st.markdown(f"<div style='font-size:12px;color:#FF3B30;'>• {det}</div>",
                                 unsafe_allow_html=True)
 
-            # Limpiar estado y cache para reflejar cambios
             for k in ["_sku_products", "_sku_counters", "_sku_unassigned", "_sku_assigned"]:
                 st.session_state.pop(k, None)
             st.cache_data.clear()
