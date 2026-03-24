@@ -630,8 +630,91 @@ def cargar_ventas_60d(_token, _locations):
 
 
 def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
-    desde  = fecha_desde.strftime("%Y-%m-%dT00:00:00Z")
-    hasta  = fecha_hasta.strftime("%Y-%m-%dT23:59:59Z")
+    """Usa ShopifyQL (API de reportes) para obtener exactamente los mismos
+    números que muestra el dashboard de Shopify."""
+    desde_str = fecha_desde.strftime("%Y-%m-%d")
+    hasta_str = fecha_hasta.strftime("%Y-%m-%d")
+
+    shopify_ql = f"""
+    FROM sales
+    SHOW product_title, net_sales, total_sales, quantity_ordered
+    GROUP BY product_title
+    SINCE {desde_str}
+    UNTIL {hasta_str}
+    ORDER BY total_sales DESC
+    LIMIT 500
+    """
+
+    GQL = """
+    mutation runReport($query: String!) {
+      queryRoot {
+        reportingQuery(shopifyql: $query) {
+          ... on ReportingQueryResult {
+            parseStatus {
+              queryString
+              status
+            }
+            tableData {
+              rowData
+              columns {
+                name
+                dataType
+                displayName
+              }
+            }
+          }
+          ... on ParseError {
+            code
+            message
+            range { start { line column } end { line column } }
+          }
+        }
+      }
+    }
+    """
+    # ShopifyQL usa un endpoint diferente
+    shop    = st.secrets["TIENDA_URL"]
+    url     = f"https://{shop}/admin/api/{API_VERSION}/graphql.json"
+    headers = _headers(_token)
+
+    resp = requests.post(url, headers=headers,
+                         json={"query": GQL, "variables": {"query": shopify_ql}},
+                         timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Si ShopifyQL no disponible, fallback a REST
+    errors = data.get("errors") or []
+    reporting = ((data.get("data") or {}).get("queryRoot") or {}).get("reportingQuery") or {}
+    table = reporting.get("tableData") or {}
+    columns = [c["name"] for c in (table.get("columns") or [])]
+    rows_raw = table.get("rowData") or []
+
+    if not rows_raw or errors:
+        # Fallback: usar REST con campos básicos
+        return _cargar_ventas_rest(_token, fecha_desde, fecha_hasta)
+
+    rows = []
+    for row in rows_raw:
+        if len(row) < len(columns):
+            continue
+        rec = dict(zip(columns, row))
+        rows.append({
+            "fecha":    desde_str,
+            "producto": str(rec.get("product_title", "")),
+            "variante": "",
+            "sku":      "",
+            "cantidad": int(float(rec.get("quantity_ordered", 0) or 0)),
+            "precio":   0,
+            "total":    float(rec.get("total_sales", 0) or 0),
+        })
+    return pd.DataFrame(rows)
+
+
+def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
+    """Fallback REST cuando ShopifyQL no está disponible."""
+    desde = fecha_desde.strftime("%Y-%m-%dT00:00:00Z")
+    hasta = fecha_hasta.strftime("%Y-%m-%dT23:59:59Z")
     GQL = """
     query($cursor: String, $query: String) {
       orders(first: 250, after: $cursor, query: $query) {
@@ -662,7 +745,6 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
     query_str = f"created_at:>={desde} created_at:<={hasta}"
     rows = []
     cursor = None
-
     while True:
         data = graphql_query(_token, GQL, {"cursor": cursor, "query": query_str})
         orders_data = data.get("data", {}).get("orders", {})
@@ -678,13 +760,11 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
                 if line_id in seen_line_ids:
                     continue
                 seen_line_ids.add(line_id)
-                qty   = int(li.get("quantity") or 0)
+                qty  = int(li.get("quantity") or 0)
                 if qty <= 0:
                     continue
-                unit  = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                disc  = float((li.get("totalDiscountSet")     or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                bruto = unit * qty
-                total = bruto - disc
+                unit = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                disc = float((li.get("totalDiscountSet")     or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 rows.append({
                     "fecha":    fecha,
                     "producto": li.get("title", ""),
@@ -692,12 +772,11 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
                     "sku":      li.get("sku", ""),
                     "cantidad": qty,
                     "precio":   unit,
-                    "total":    total,
+                    "total":    unit * qty - disc,
                 })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
         cursor = orders_data["pageInfo"]["endCursor"]
-
     return pd.DataFrame(rows)
 
 
