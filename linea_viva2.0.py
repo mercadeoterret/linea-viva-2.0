@@ -700,7 +700,52 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
 
 
 def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
-    """Fallback REST cuando ShopifyQL no está disponible."""
+    """Usa el endpoint de analytics de Shopify para obtener total_sales exacto por producto."""
+    shop    = st.secrets["TIENDA_URL"]
+    headers = _headers(_token)
+    desde_str = fecha_desde.strftime("%Y-%m-%d")
+    hasta_str = fecha_hasta.strftime("%Y-%m-%d")
+
+    # Intentar con ShopifyQL via Analytics API
+    shopify_ql = (
+        f"FROM sales "
+        f"SHOW product_title, total_sales, quantity_ordered "
+        f"GROUP BY product_title "
+        f"SINCE {desde_str} UNTIL {hasta_str} "
+        f"ORDER BY total_sales DESC LIMIT 500"
+    )
+
+    try:
+        resp = requests.post(
+            f"https://{shop}/admin/api/{API_VERSION}/analytics/queries/run.json",
+            headers=headers,
+            json={"query": shopify_ql},
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            result = data.get("query_result") or data.get("result") or {}
+            cols = result.get("columns") or []
+            rows_raw = result.get("rows") or []
+            if cols and rows_raw:
+                col_names = [c.get("name", c) if isinstance(c, dict) else c for c in cols]
+                rows = []
+                for row in rows_raw:
+                    rec = dict(zip(col_names, row))
+                    rows.append({
+                        "fecha":    desde_str,
+                        "producto": str(rec.get("product_title", "")),
+                        "variante": "",
+                        "sku":      "",
+                        "cantidad": int(float(rec.get("quantity_ordered", 0) or 0)),
+                        "precio":   0,
+                        "total":    float(rec.get("total_sales", 0) or 0),
+                    })
+                return pd.DataFrame(rows)
+    except Exception:
+        pass
+
+    # Fallback final: GraphQL orders
     desde = fecha_desde.strftime("%Y-%m-%dT00:00:00Z")
     hasta = fecha_hasta.strftime("%Y-%m-%dT23:59:59Z")
     GQL = """
@@ -761,10 +806,6 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                     "cantidad": qty,
                     "precio":   unit,
                     "total":    unit * qty - disc,
-                    "_debug_unit": unit,
-                    "_debug_disc": disc,
-                    "_debug_qty":  qty,
-                    "_debug_all":  str({k: v for k, v in li.items() if "Set" in k or "price" in k.lower() or "total" in k.lower()}),
                 })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
@@ -1478,12 +1519,6 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
-    # ── DEBUG CAMPOS MONETARIOS ───────────────────────────────────────────────
-    with st.expander("🔍 Debug campos monetarios — primeras 5 líneas Medias Tobilleras", expanded=True):
-        debug = df_v[df_v["producto"].str.contains("Tobilleras de Running Olympo", case=False, na=False)].head(5)
-        if not debug.empty and "_debug_all" in debug.columns:
-            for _, r in debug.iterrows():
-                st.code(f"qty={r['_debug_qty']} | unit={r['_debug_unit']} | disc={r['_debug_disc']} | total={r['total']:.0f}\nALL: {r['_debug_all']}")
     # ── DEBUG VERIFICACIÓN ────────────────────────────────────────────────────
     with st.expander("🔍 Verificación — Top 20 productos (compara con Shopify)", expanded=False):
         top_debug = (
