@@ -589,8 +589,6 @@ def cargar_ventas_60d(_token, _locations):
 @st.cache_data(ttl=3600)
 def cargar_ventas_rango(_token, dias):
     desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # status=any trae todas; filtramos canceladas manualmente para no perder
-    # órdenes parcialmente reembolsadas que sí tienen venta real.
     orders = rest_paginated(
         _token, "orders.json", "orders",
         {"status": "any", "created_at_min": desde,
@@ -599,23 +597,24 @@ def cargar_ventas_rango(_token, dias):
     )
     rows = []
     for order in orders:
-        # Excluir órdenes canceladas (cancelled_at es más confiable que cancel_reason)
         if order.get("cancelled_at") or order.get("cancel_reason"):
             continue
-        fecha = order.get("created_at", "")[:10]
+        fecha    = order.get("created_at", "")[:10]
+        order_id = str(order.get("id", ""))
         for item in order.get("line_items", []):
             qty      = int(item.get("quantity", 0))
             prc      = float(item.get("price", 0) or 0)
             discount = float(item.get("total_discount", 0) or 0)
             neto     = max(0.0, qty * prc - discount)
             rows.append({
-                "fecha":    fecha,
-                "producto": item.get("title", ""),
-                "variante": item.get("variant_title", ""),
-                "sku":      item.get("sku", ""),
-                "cantidad": qty,
-                "precio":   prc,
-                "total":    neto,
+                "fecha":      fecha,
+                "order_id":   order_id,
+                "producto":   item.get("title", ""),
+                "variante":   item.get("variant_title", ""),
+                "sku":        item.get("sku", ""),
+                "cantidad":   qty,
+                "precio":     prc,
+                "total":      neto,
             })
     return pd.DataFrame(rows)
 
@@ -1318,6 +1317,18 @@ def vista_ventas(token):
                    tickprefix="$", tickformat=",.0f", tickfont=dict(size=9)),
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
+
+    # ── DEBUG TEMPORAL ────────────────────────────────────────────────────────
+    with st.expander("🔍 Debug — líneas del Buzo Visione Blue", expanded=True):
+        debug = df_v[df_v["producto"].str.contains("VISIONE RITMO BLUE", case=False, na=False)]
+        if debug.empty:
+            st.write("No se encontraron líneas con ese nombre")
+        else:
+            st.dataframe(
+                debug[["fecha", "order_id", "variante", "cantidad", "precio", "total"]],
+                use_container_width=True, hide_index=True
+            )
+            st.write(f"**Total sumado: ${debug['total'].sum():,.0f}** — {len(debug)} líneas de {debug['order_id'].nunique()} órdenes")
 
     # ── PARETO 80/20 ──────────────────────────────────────────────────────────
     _seccion("PARETO 80 / 20", f"Qué productos generan el 80% del revenue · {sel_rango}")
