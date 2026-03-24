@@ -587,10 +587,9 @@ def cargar_ventas_60d(_token, _locations):
       }
     }
     """
-    query_str = f"created_at:>={desde} -cancelled_at:*"
+    query_str = f"created_at:>={desde}"
     ventas_global  = {}
     ventas_por_loc = {}
-    seen_line_ids  = set()
     cursor = None
 
     while True:
@@ -604,19 +603,18 @@ def cargar_ventas_60d(_token, _locations):
             loc_id   = loc_gid.split("/")[-1] if loc_gid else ""
             loc_name = loc_id_to_name.get(loc_id, ONLINE)
 
+            # Por cada orden, contar currentQuantity una sola vez por variant_id
+            seen_vids = set()
             for li_edge in node.get("lineItems", {}).get("edges", []):
                 li = li_edge["node"]
-                line_id = li.get("id", "")
-                if line_id in seen_line_ids:
-                    continue
-                seen_line_ids.add(line_id)
                 variant = li.get("variant") or {}
                 vid = variant.get("id", "").split("/")[-1]
-                if not vid:
+                if not vid or vid in seen_vids:
                     continue
                 qty = int(li.get("currentQuantity") or li.get("quantity", 0))
                 if qty == 0:
                     continue
+                seen_vids.add(vid)
                 ventas_global[vid] = ventas_global.get(vid, 0) + qty
                 if vid not in ventas_por_loc:
                     ventas_por_loc[vid] = {}
@@ -660,10 +658,9 @@ def cargar_ventas_rango(_token, dias):
       }
     }
     """
-    query_str = f"created_at:>={desde} -cancelled_at:*"
+    query_str = f"created_at:>={desde}"
     rows = []
     cursor = None
-    seen_line_ids = set()
 
     while True:
         data = graphql_query(_token, GQL, {"cursor": cursor, "query": query_str})
@@ -673,27 +670,29 @@ def cargar_ventas_rango(_token, dias):
             if node.get("cancelledAt"):
                 continue
             fecha = node.get("createdAt", "")[:10]
+            # Por cada orden, tomar currentQuantity una sola vez por variante
+            variant_qtys = {}
             for li_edge in node.get("lineItems", {}).get("edges", []):
                 li = li_edge["node"]
-                line_id = li.get("id", "")
-                if line_id in seen_line_ids:
-                    continue
-                seen_line_ids.add(line_id)
-                qty  = int(li.get("currentQuantity") or li.get("quantity", 0))
+                qty = int(li.get("currentQuantity") or li.get("quantity", 0))
                 if qty == 0:
+                    continue
+                key = (li.get("title", ""), li.get("variantTitle", ""))
+                # Si ya existe esta variante, NO sumar — quedarse con la primera aparición
+                if key in variant_qtys:
                     continue
                 prc  = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 disc = float((li.get("discountedUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                neto = disc * qty
-                rows.append({
+                variant_qtys[key] = {
                     "fecha":    fecha,
                     "producto": li.get("title", ""),
                     "variante": li.get("variantTitle", ""),
                     "sku":      li.get("sku", ""),
                     "cantidad": qty,
                     "precio":   prc,
-                    "total":    neto,
-                })
+                    "total":    (disc or prc) * qty,
+                }
+            rows.extend(variant_qtys.values())
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
         cursor = orders_data["pageInfo"]["endCursor"]
