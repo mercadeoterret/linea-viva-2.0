@@ -577,6 +577,7 @@ def cargar_ventas_60d(_token, _locations):
                 node {
                   id
                   quantity
+                  currentQuantity
                   variant { id }
                 }
               }
@@ -613,7 +614,9 @@ def cargar_ventas_60d(_token, _locations):
                 vid = variant.get("id", "").split("/")[-1]
                 if not vid:
                     continue
-                qty = int(li.get("quantity", 0))
+                qty = int(li.get("currentQuantity") or li.get("quantity", 0))
+                if qty == 0:
+                    continue
                 ventas_global[vid] = ventas_global.get(vid, 0) + qty
                 if vid not in ventas_por_loc:
                     ventas_por_loc[vid] = {}
@@ -646,6 +649,7 @@ def cargar_ventas_rango(_token, dias):
                   variantTitle
                   sku
                   quantity
+                  currentQuantity
                   originalUnitPriceSet { shopMoney { amount } }
                   discountedUnitPriceSet { shopMoney { amount } }
                 }
@@ -675,7 +679,9 @@ def cargar_ventas_rango(_token, dias):
                 if line_id in seen_line_ids:
                     continue
                 seen_line_ids.add(line_id)
-                qty  = int(li.get("quantity", 0))
+                qty  = int(li.get("currentQuantity") or li.get("quantity", 0))
+                if qty == 0:
+                    continue
                 prc  = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 disc = float((li.get("discountedUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 neto = disc * qty
