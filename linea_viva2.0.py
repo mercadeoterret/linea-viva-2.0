@@ -563,84 +563,135 @@ def cargar_ventas_60d(_token, _locations):
     ONLINE = "TERRET"
 
     desde = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    orders = rest_paginated(
-        _token, "orders.json", "orders",
-        {"status": "open,closed", "created_at_min": desde,
-         "fields": "id,location_id,cancelled_at,cancel_reason,financial_status,line_items", "limit": 250},
-    )
+    GQL = """
+    query($cursor: String, $query: String) {
+      orders(first: 250, after: $cursor, query: $query) {
+        pageInfo { hasNextPage endCursor }
+        edges {
+          node {
+            id
+            cancelledAt
+            physicalLocation { id name }
+            lineItems(first: 250) {
+              edges {
+                node {
+                  id
+                  quantity
+                  variant { id }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+    query_str = f"created_at:>={desde} -cancelled_at:*"
     ventas_global  = {}
     ventas_por_loc = {}
-    seen_orders    = set()
+    seen_line_ids  = set()
+    cursor = None
 
-    for order in orders:
-        order_id = str(order.get("id", ""))
-        if order_id in seen_orders:
-            continue
-        seen_orders.add(order_id)
-        if order.get("cancelled_at") or order.get("cancel_reason"):
-            continue
-
-        loc_id   = str(order.get("location_id") or "")
-        loc_name = loc_id_to_name.get(loc_id, ONLINE)
-
-        seen_line_ids = set()
-        for item in order.get("line_items", []):
-            line_id = str(item.get("id", ""))
-            if line_id and line_id in seen_line_ids:
+    while True:
+        data = graphql_query(_token, GQL, {"cursor": cursor, "query": query_str})
+        orders_data = data.get("data", {}).get("orders", {})
+        for edge in orders_data.get("edges", []):
+            node = edge["node"]
+            if node.get("cancelledAt"):
                 continue
-            if line_id:
+            loc_gid  = (node.get("physicalLocation") or {}).get("id", "")
+            loc_id   = loc_gid.split("/")[-1] if loc_gid else ""
+            loc_name = loc_id_to_name.get(loc_id, ONLINE)
+
+            for li_edge in node.get("lineItems", {}).get("edges", []):
+                li = li_edge["node"]
+                line_id = li.get("id", "")
+                if line_id in seen_line_ids:
+                    continue
                 seen_line_ids.add(line_id)
-            vid = str(item.get("variant_id", ""))
-            if not vid or vid == "None":
-                continue
-            qty = int(item.get("quantity", 0))
-            ventas_global[vid] = ventas_global.get(vid, 0) + qty
-            if vid not in ventas_por_loc:
-                ventas_por_loc[vid] = {}
-            ventas_por_loc[vid][loc_name] = ventas_por_loc[vid].get(loc_name, 0) + qty
+                variant = li.get("variant") or {}
+                vid = variant.get("id", "").split("/")[-1]
+                if not vid:
+                    continue
+                qty = int(li.get("quantity", 0))
+                ventas_global[vid] = ventas_global.get(vid, 0) + qty
+                if vid not in ventas_por_loc:
+                    ventas_por_loc[vid] = {}
+                ventas_por_loc[vid][loc_name] = ventas_por_loc[vid].get(loc_name, 0) + qty
+
+        if not orders_data.get("pageInfo", {}).get("hasNextPage"):
+            break
+        cursor = orders_data["pageInfo"]["endCursor"]
 
     return ventas_global, ventas_por_loc
 
 
+
 def cargar_ventas_rango(_token, dias):
     desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    orders = rest_paginated(
-        _token, "orders.json", "orders",
-        {"status": "open,closed", "created_at_min": desde,
-         "fields": "id,created_at,cancelled_at,cancel_reason,financial_status,line_items",
-         "limit": 250},
-    )
+    GQL = """
+    query($cursor: String, $query: String) {
+      orders(first: 250, after: $cursor, query: $query) {
+        pageInfo { hasNextPage endCursor }
+        edges {
+          node {
+            id
+            createdAt
+            cancelledAt
+            lineItems(first: 250) {
+              edges {
+                node {
+                  id
+                  title
+                  variantTitle
+                  sku
+                  quantity
+                  originalUnitPriceSet { shopMoney { amount } }
+                  discountedUnitPriceSet { shopMoney { amount } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+    query_str = f"created_at:>={desde} -cancelled_at:*"
     rows = []
-    seen_orders = set()
-    for order in orders:
-        order_id = str(order.get("id", ""))
-        if order_id in seen_orders:
-            continue
-        seen_orders.add(order_id)
-        if order.get("cancelled_at") or order.get("cancel_reason"):
-            continue
-        fecha = order.get("created_at", "")[:10]
-        seen_line_ids = set()
-        for item in order.get("line_items", []):
-            line_id = str(item.get("id", ""))
-            if line_id and line_id in seen_line_ids:
+    cursor = None
+    seen_line_ids = set()
+
+    while True:
+        data = graphql_query(_token, GQL, {"cursor": cursor, "query": query_str})
+        orders_data = data.get("data", {}).get("orders", {})
+        for edge in orders_data.get("edges", []):
+            node = edge["node"]
+            if node.get("cancelledAt"):
                 continue
-            if line_id:
+            fecha = node.get("createdAt", "")[:10]
+            for li_edge in node.get("lineItems", {}).get("edges", []):
+                li = li_edge["node"]
+                line_id = li.get("id", "")
+                if line_id in seen_line_ids:
+                    continue
                 seen_line_ids.add(line_id)
-            qty      = int(item.get("quantity", 0))
-            prc      = float(item.get("price", 0) or 0)
-            discount = float(item.get("total_discount", 0) or 0)
-            neto     = max(0.0, qty * prc - discount)
-            rows.append({
-                "fecha":    fecha,
-                "order_id": order_id,
-                "producto": item.get("title", ""),
-                "variante": item.get("variant_title", ""),
-                "sku":      item.get("sku", ""),
-                "cantidad": qty,
-                "precio":   prc,
-                "total":    neto,
-            })
+                qty  = int(li.get("quantity", 0))
+                prc  = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                disc = float((li.get("discountedUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                neto = disc * qty
+                rows.append({
+                    "fecha":    fecha,
+                    "producto": li.get("title", ""),
+                    "variante": li.get("variantTitle", ""),
+                    "sku":      li.get("sku", ""),
+                    "cantidad": qty,
+                    "precio":   prc,
+                    "total":    neto,
+                })
+        if not orders_data.get("pageInfo", {}).get("hasNextPage"):
+            break
+        cursor = orders_data["pageInfo"]["endCursor"]
+
     return pd.DataFrame(rows)
 
 
@@ -1343,20 +1394,6 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
-    # ── DEBUG ─────────────────────────────────────────────────────────────────
-    with st.expander("🔍 Debug — Buzo Black Hombre", expanded=True):
-        debug = df_v[df_v["producto"].str.contains("VISIONE RITMO BLACK", case=False, na=False)]
-        if debug.empty:
-            st.warning("No encontrado — productos disponibles:")
-            prods_uniq = df_v["producto"].unique()
-            buzo = [p for p in prods_uniq if "VISIONE" in p.upper() or "BUZO" in p.upper()]
-            st.write(buzo[:20])
-        else:
-            st.write(f"**{len(debug)} líneas · {debug['order_id'].nunique()} órdenes · Total: ${debug['total'].sum():,.0f}**")
-            st.dataframe(
-                debug[["fecha","order_id","variante","cantidad","precio","total"]].sort_values("order_id"),
-                use_container_width=True, hide_index=True
-            )
     # ── PARETO 80/20 ──────────────────────────────────────────────────────────
     _seccion("PARETO 80 / 20", f"Qué productos generan el 80% del revenue · {sel_rango}")
 
