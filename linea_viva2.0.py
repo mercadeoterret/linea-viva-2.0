@@ -558,7 +558,7 @@ def cargar_stock(_token, _productos):
     return stock_map
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1)
 def cargar_ventas_60d(_token, _locations):
     loc_id_to_name = {str(loc["id"]): loc["name"] for loc in _locations}
     ONLINE = "TERRET"
@@ -597,7 +597,7 @@ def cargar_ventas_60d(_token, _locations):
     return ventas_global, ventas_por_loc
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1)
 def cargar_ventas_rango(_token, dias):
     desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%dT%H:%M:%SZ")
     orders = rest_paginated(
