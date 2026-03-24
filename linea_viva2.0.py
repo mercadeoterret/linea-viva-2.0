@@ -766,7 +766,7 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                   sku
                   quantity
                   originalUnitPriceSet { shopMoney { amount } }
-                  totalDiscountSet { shopMoney { amount } }
+                  discountedUnitPriceSet { shopMoney { amount } }
                 }
               }
             }
@@ -796,8 +796,8 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                 qty  = int(li.get("quantity") or 0)
                 if qty <= 0:
                     continue
-                unit = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                disc = float((li.get("totalDiscountSet")     or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                unit = float((li.get("originalUnitPriceSet")   or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                disc = float((li.get("discountedUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 rows.append({
                     "fecha":    fecha,
                     "producto": li.get("title", ""),
@@ -805,7 +805,7 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                     "sku":      li.get("sku", ""),
                     "cantidad": qty,
                     "precio":   unit,
-                    "total":    unit * qty - disc,
+                    "total":    disc * qty,
                 })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
