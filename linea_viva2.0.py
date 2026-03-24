@@ -757,6 +757,7 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
             id
             createdAt
             cancelledAt
+            sourceName
             lineItems(first: 250) {
               edges {
                 node {
@@ -777,6 +778,17 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
     query_str = f"created_at:>={desde} created_at:<={hasta}"
     rows = []
     cursor = None
+
+    # Mapeo de sourceName → canal legible
+    CANAL_MAP = {
+        "web":          "Online Store",
+        "shopify_draft_order": "Draft Orders",
+        "pos":          "Point of Sale",
+        "iphone":       "Online Store",
+        "android":      "Online Store",
+        None:           "Online Store",
+    }
+
     while True:
         data = graphql_query(_token, GQL, {"cursor": cursor, "query": query_str})
         orders_data = data.get("data", {}).get("orders", {})
@@ -784,7 +796,12 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
             node = edge["node"]
             if node.get("cancelledAt"):
                 continue
-            fecha = node.get("createdAt", "")[:10]
+            fecha      = node.get("createdAt", "")[:10]
+            source     = node.get("sourceName") or ""
+            canal      = CANAL_MAP.get(source.lower() if source else None,
+                         "Draft Orders" if "draft" in source.lower() else
+                         "Point of Sale" if "pos" in source.lower() else
+                         "Online Store")
             seen_line_ids = set()
             for li_edge in node.get("lineItems", {}).get("edges", []):
                 li = li_edge["node"]
@@ -798,6 +815,7 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                 unit = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 rows.append({
                     "fecha":    fecha,
+                    "canal":    canal,
                     "producto": li.get("title", ""),
                     "variante": li.get("variantTitle", ""),
                     "sku":      li.get("sku", ""),
@@ -1047,6 +1065,44 @@ def vista_dashboard(df, locations):
                     f"line-height:1;'>{stock_loc:,}</div>"
                     f"<div style='font-size:10px;color:#6B6456;margin-top:4px;'>"
                     f"{skus_loc} SKUs · {comp_loc:,} comprometidas</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+    # ── Ventas 30d por canal ──────────────────────────────────────────────────
+    _seccion("VENTAS POR CANAL", "Últimos 30 días · ventas brutas")
+    hoy_d   = datetime.now().date()
+    desde_d = hoy_d - timedelta(days=30)
+    with st.spinner("Cargando ventas por canal..."):
+        df_canales = cargar_ventas_rango(token, desde_d, hoy_d)
+
+    if not df_canales.empty and "canal" in df_canales.columns:
+        CANAL_COLORES = {
+            "Online Store":  "#2D6A4F",
+            "Point of Sale": "#4488FF",
+            "Draft Orders":  "#FFB800",
+        }
+        resumen_canal = (
+            df_canales.groupby("canal")
+            .agg(total=("total", "sum"), unidades=("cantidad", "sum"))
+            .reset_index()
+            .sort_values("total", ascending=False)
+        )
+        total_global = resumen_canal["total"].sum()
+        cols_canal   = st.columns(len(resumen_canal))
+        for i, row in enumerate(resumen_canal.itertuples()):
+            color_c = CANAL_COLORES.get(row.canal, "#B8B0A4")
+            pct     = round(row.total / total_global * 100, 1) if total_global > 0 else 0
+            with cols_canal[i]:
+                st.markdown(
+                    f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
+                    f"border-left:4px solid {color_c};border-radius:6px;padding:12px 14px;'>"
+                    f"<div style='font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
+                    f"color:#6B6456;margin-bottom:6px;'>{row.canal}</div>"
+                    f"<div style='font-family:Bebas Neue,sans-serif;font-size:1.6rem;"
+                    f"color:{color_c};line-height:1;'>{fmt_pesos(row.total)}</div>"
+                    f"<div style='font-size:10px;color:#6B6456;margin-top:4px;'>"
+                    f"{int(row.unidades):,} u · {pct}% del total</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -1467,15 +1523,20 @@ def vista_ventas(token):
     )
 
     hoy         = datetime.now().date()
-    fecha_desde = st.date_input("Desde", value=hoy - timedelta(days=30), max_value=hoy, key="ventas_desde")
-    fecha_hasta = st.date_input("Hasta", value=hoy, max_value=hoy, key="ventas_hasta")
+    col_d, col_h, col_c = st.columns([2, 2, 2])
+    with col_d:
+        fecha_desde = st.date_input("Desde", value=hoy - timedelta(days=30), max_value=hoy, key="ventas_desde")
+    with col_h:
+        fecha_hasta = st.date_input("Hasta", value=hoy, max_value=hoy, key="ventas_hasta")
+    with col_c:
+        CANALES_OPCIONES = ["Todos los canales", "Online Store", "Point of Sale", "Draft Orders"]
+        sel_canal = st.selectbox("Canal", CANALES_OPCIONES, key="ventas_canal")
 
     if fecha_desde > fecha_hasta:
         st.error("La fecha de inicio debe ser anterior a la fecha final.")
         return
 
     sel_rango = f"{fecha_desde.strftime('%d/%m/%Y')} → {fecha_hasta.strftime('%d/%m/%Y')}"
-    dias_sel  = (fecha_hasta - fecha_desde).days + 1
 
     with st.spinner("Cargando ventas..."):
         df_v = cargar_ventas_rango(token, fecha_desde, fecha_hasta)
@@ -1484,14 +1545,58 @@ def vista_ventas(token):
         st.info("Sin ventas en el período.")
         return
 
+    # Asegurar columna canal
+    if "canal" not in df_v.columns:
+        df_v["canal"] = "Online Store"
+
     df_v["fecha"] = pd.to_datetime(df_v["fecha"])
-    tot   = df_v["total"].sum()
-    unids = int(df_v["cantidad"].sum())
+
+    # ── Tarjetas por canal (siempre visibles) ─────────────────────────────────
+    CANALES_INFO = {
+        "Online Store":  {"color": "#2D6A4F", "icon": "🌐"},
+        "Point of Sale": {"color": "#4488FF", "icon": "🏪"},
+        "Draft Orders":  {"color": "#FF9500", "icon": "📋"},
+    }
+    cols_c = st.columns(3)
+    for i, (canal_name, info) in enumerate(CANALES_INFO.items()):
+        sub_c = df_v[df_v["canal"] == canal_name]
+        tot_c = sub_c["total"].sum()
+        uni_c = int(sub_c["cantidad"].sum())
+        activo = sel_canal == canal_name or sel_canal == "Todos los canales"
+        opacity = "1" if activo else "0.4"
+        with cols_c[i]:
+            st.markdown(
+                f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
+                f"border-left:3px solid {info['color']};border-radius:6px;"
+                f"padding:10px 14px;opacity:{opacity};'>"
+                f"<div style='font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
+                f"color:#6B6456;margin-bottom:4px;'>{info['icon']} {canal_name}</div>"
+                f"<div style='font-family:Bebas Neue,sans-serif;font-size:1.5rem;"
+                f"color:{info['color']};line-height:1;'>{fmt_pesos(tot_c)}</div>"
+                f"<div style='font-size:10px;color:#6B6456;margin-top:3px;'>{uni_c:,} unidades</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("<hr style='border-color:#D4CFC4;margin:16px 0;'>", unsafe_allow_html=True)
+
+    # Filtrar por canal seleccionado
+    df_view = df_v.copy()
+    if sel_canal != "Todos los canales":
+        df_view = df_v[df_v["canal"] == sel_canal].copy()
+        if df_view.empty:
+            st.info(f"Sin ventas para '{sel_canal}' en este período.")
+            return
+    else:
+        df_view = df_v.copy()
+
+    tot   = df_view["total"].sum()
+    unids = int(df_view["cantidad"].sum())
 
     c1, c2, c3 = st.columns(3)
-    with c1: st.metric("Ventas brutas",        fmt_pesos(tot))
-    with c2: st.metric("Unidades vendidas",    f"{unids:,}")
-    with c3: st.metric("Ticket promedio",      fmt_pesos(tot / unids) if unids else "—")
+    with c1: st.metric(f"Ventas brutas", fmt_pesos(tot))
+    with c2: st.metric("Unidades vendidas", f"{unids:,}")
+    with c3: st.metric("Ticket promedio",   fmt_pesos(tot / unids) if unids else "—")
 
     st.markdown(
         "<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-left:3px solid #FFB800;"
@@ -1508,7 +1613,7 @@ def vista_ventas(token):
         "letter-spacing:2px;color:#6B6456;margin-bottom:6px;'>EVOLUCIÓN DIARIA</div>",
         unsafe_allow_html=True,
     )
-    evol = df_v.groupby("fecha").agg(total=("total", "sum")).reset_index()
+    evol = df_view.groupby("fecha").agg(total=("total", "sum")).reset_index()
     fig_evol = go.Figure(go.Scatter(
         x=evol["fecha"], y=evol["total"],
         mode="lines", fill="tozeroy",
@@ -1530,7 +1635,7 @@ def vista_ventas(token):
 
     # Agregar por producto
     pareto = (
-        df_v.groupby("producto")
+        df_view.groupby("producto")
         .agg(total=("total", "sum"), unidades=("cantidad", "sum"))
         .reset_index()
         .sort_values("total", ascending=False)
@@ -1779,7 +1884,7 @@ def vista_ventas(token):
     # ── TOP PRODUCTOS (existente) ──────────────────────────────────────────────
     _seccion("TOP PRODUCTOS", f"Por valor de venta · {sel_rango}")
     tp = (
-        df_v.groupby("producto")
+        df_view.groupby("producto")
         .agg(total=("total", "sum"), unidades=("cantidad", "sum"))
         .reset_index()
         .sort_values("total", ascending=False)
@@ -1808,7 +1913,7 @@ def vista_ventas(token):
 
     _seccion("DETALLE POR SKU", "Variantes ordenadas por unidades vendidas")
     det = (
-        df_v.groupby(["producto", "sku", "variante"])
+        df_view.groupby(["producto", "sku", "variante"])
         .agg(unidades=("cantidad", "sum"), total=("total", "sum"))
         .reset_index()
         .sort_values(["producto", "unidades"], ascending=[True, False])
