@@ -621,6 +621,7 @@ def cargar_ventas_rango(_token, dias):
             neto     = max(0.0, qty * prc - discount)
             rows.append({
                 "fecha":    fecha,
+                "order_id": order_id,
                 "producto": item.get("title", ""),
                 "variante": item.get("variant_title", ""),
                 "sku":      item.get("sku", ""),
@@ -1330,6 +1331,20 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
+    # ── DEBUG ─────────────────────────────────────────────────────────────────
+    with st.expander("🔍 Debug — Buzo Black Hombre", expanded=True):
+        debug = df_v[df_v["producto"].str.contains("VISIONE RITMO BLACK", case=False, na=False)]
+        if debug.empty:
+            st.warning("No encontrado — productos disponibles:")
+            prods_uniq = df_v["producto"].unique()
+            buzo = [p for p in prods_uniq if "VISIONE" in p.upper() or "BUZO" in p.upper()]
+            st.write(buzo[:20])
+        else:
+            st.write(f"**{len(debug)} líneas · {debug['order_id'].nunique()} órdenes · Total: ${debug['total'].sum():,.0f}**")
+            st.dataframe(
+                debug[["fecha","order_id","variante","cantidad","precio","total"]].sort_values("order_id"),
+                use_container_width=True, hide_index=True
+            )
     # ── PARETO 80/20 ──────────────────────────────────────────────────────────
     _seccion("PARETO 80 / 20", f"Qué productos generan el 80% del revenue · {sel_rango}")
 
