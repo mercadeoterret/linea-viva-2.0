@@ -651,6 +651,8 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
                   currentQuantity
                   originalTotalSet { shopMoney { amount } }
                   discountedTotalSet { shopMoney { amount } }
+                  totalDiscountSet { shopMoney { amount } }
+                  taxLines { priceSet { shopMoney { amount } } }
                 }
               }
             }
@@ -681,16 +683,22 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
                 qty = int(li.get("currentQuantity") or 0)
                 if qty <= 0:
                     continue
-                prc   = float((li.get("originalTotalSet")    or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                total = float((li.get("discountedTotalSet")  or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                orig_total = float((li.get("originalTotalSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                disc_total = float((li.get("discountedTotalSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                tax_total  = sum(
+                    float((tl.get("priceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                    for tl in (li.get("taxLines") or [])
+                )
+                # Ventas totales Shopify = discountedTotal + impuestos
+                total = disc_total + tax_total
                 rows.append({
                     "fecha":    fecha,
                     "producto": li.get("title", ""),
                     "variante": li.get("variantTitle", ""),
                     "sku":      li.get("sku", ""),
                     "cantidad": qty,
-                    "precio":   prc / qty if qty else 0,
-                    "total":    total or prc,
+                    "precio":   orig_total / qty if qty else 0,
+                    "total":    total,
                 })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
