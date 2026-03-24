@@ -761,6 +761,10 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                     "cantidad": qty,
                     "precio":   unit,
                     "total":    unit * qty - disc,
+                    "_debug_unit": unit,
+                    "_debug_disc": disc,
+                    "_debug_qty":  qty,
+                    "_debug_all":  str({k: v for k, v in li.items() if "Set" in k or "price" in k.lower() or "total" in k.lower()}),
                 })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
@@ -1474,6 +1478,12 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
+    # ── DEBUG CAMPOS MONETARIOS ───────────────────────────────────────────────
+    with st.expander("🔍 Debug campos monetarios — primeras 5 líneas Medias Tobilleras", expanded=True):
+        debug = df_v[df_v["producto"].str.contains("Tobilleras de Running Olympo", case=False, na=False)].head(5)
+        if not debug.empty and "_debug_all" in debug.columns:
+            for _, r in debug.iterrows():
+                st.code(f"qty={r['_debug_qty']} | unit={r['_debug_unit']} | disc={r['_debug_disc']} | total={r['total']:.0f}\nALL: {r['_debug_all']}")
     # ── DEBUG VERIFICACIÓN ────────────────────────────────────────────────────
     with st.expander("🔍 Verificación — Top 20 productos (compara con Shopify)", expanded=False):
         top_debug = (
