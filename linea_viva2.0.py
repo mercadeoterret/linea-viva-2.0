@@ -32,7 +32,7 @@ LOCATIONS_EXCLUIR = ["Recogida en tienda (NO USAR)"]
 LOCATIONS_VALIDAS = ["TERRET", "Tienda Fisica", "Tienda Móvil - Ferias"]
 DIAS_OBJETIVO  = 60
 MULTIPLO       = 6
-API_VERSION    = "2024-01"
+API_VERSION    = "2024-10"
 
 # ─── PREFIJOS SKU ─────────────────────────────────────────────────────────────
 PREFIX_MAP = {
