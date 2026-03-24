@@ -649,7 +649,7 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
                   variantTitle
                   sku
                   quantity
-                  originalTotalSet { shopMoney { amount } }
+                  originalUnitPriceSet { shopMoney { amount } }
                   totalDiscountSet { shopMoney { amount } }
                 }
               }
@@ -681,16 +681,17 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
                 qty   = int(li.get("quantity") or 0)
                 if qty <= 0:
                     continue
-                orig  = float((li.get("originalTotalSet")  or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                disc  = float((li.get("totalDiscountSet")  or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                total = orig - disc
+                unit  = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                disc  = float((li.get("totalDiscountSet")     or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                bruto = unit * qty
+                total = bruto - disc
                 rows.append({
                     "fecha":    fecha,
                     "producto": li.get("title", ""),
                     "variante": li.get("variantTitle", ""),
                     "sku":      li.get("sku", ""),
                     "cantidad": qty,
-                    "precio":   orig / qty if qty else 0,
+                    "precio":   unit,
                     "total":    total,
                 })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
