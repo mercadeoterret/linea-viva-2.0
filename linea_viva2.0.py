@@ -576,7 +576,7 @@ def cargar_ventas_60d(_token, _locations):
               edges {
                 node {
                   id
-                  currentQuantity
+                  quantity
                   variant { id }
                 }
               }
@@ -613,7 +613,7 @@ def cargar_ventas_60d(_token, _locations):
                 vid = variant.get("id", "").split("/")[-1]
                 if not vid:
                     continue
-                qty = int(li.get("currentQuantity") or 0)
+                qty = int(li.get("quantity") or 0)
                 if qty <= 0:
                     continue
                 ventas_global[vid] = ventas_global.get(vid, 0) + qty
@@ -648,11 +648,9 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
                   title
                   variantTitle
                   sku
-                  currentQuantity
+                  quantity
                   originalTotalSet { shopMoney { amount } }
                   discountedTotalSet { shopMoney { amount } }
-                  totalDiscountSet { shopMoney { amount } }
-                  taxLines { priceSet { shopMoney { amount } } }
                 }
               }
             }
@@ -680,25 +678,19 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
                 if line_id in seen_line_ids:
                     continue
                 seen_line_ids.add(line_id)
-                qty = int(li.get("currentQuantity") or 0)
+                qty   = int(li.get("quantity") or 0)
                 if qty <= 0:
                     continue
-                orig_total = float((li.get("originalTotalSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                disc_total = float((li.get("discountedTotalSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                tax_total  = sum(
-                    float((tl.get("priceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                    for tl in (li.get("taxLines") or [])
-                )
-                # Ventas totales Shopify = discountedTotal + impuestos
-                total = disc_total + tax_total
+                orig  = float((li.get("originalTotalSet")   or {}).get("shopMoney", {}).get("amount", 0) or 0)
+                disc  = float((li.get("discountedTotalSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 rows.append({
                     "fecha":    fecha,
                     "producto": li.get("title", ""),
                     "variante": li.get("variantTitle", ""),
                     "sku":      li.get("sku", ""),
                     "cantidad": qty,
-                    "precio":   orig_total / qty if qty else 0,
-                    "total":    total,
+                    "precio":   orig / qty if qty else 0,
+                    "total":    disc if disc else orig,
                 })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
