@@ -576,9 +576,7 @@ def cargar_ventas_60d(_token, _locations):
               edges {
                 node {
                   id
-                  quantity
                   currentQuantity
-                  nonFulfillableQuantity
                   variant { id }
                 }
               }
@@ -604,22 +602,20 @@ def cargar_ventas_60d(_token, _locations):
             loc_id   = loc_gid.split("/")[-1] if loc_gid else ""
             loc_name = loc_id_to_name.get(loc_id, ONLINE)
 
-            # Por cada orden, tomar la ÚLTIMA aparición de cada variant_id (estado final)
-            seen_vids = {}
+            seen_line_ids = set()
             for li_edge in node.get("lineItems", {}).get("edges", []):
                 li = li_edge["node"]
+                line_id = li.get("id", "")
+                if line_id in seen_line_ids:
+                    continue
+                seen_line_ids.add(line_id)
                 variant = li.get("variant") or {}
                 vid = variant.get("id", "").split("/")[-1]
                 if not vid:
                     continue
-                qty_orig    = int(li.get("quantity", 0))
-                qty_nonfulf = int(li.get("nonFulfillableQuantity", 0))
-                qty = qty_orig - qty_nonfulf
+                qty = int(li.get("currentQuantity") or 0)
                 if qty <= 0:
                     continue
-                seen_vids[vid] = qty
-
-            for vid, qty in seen_vids.items():
                 ventas_global[vid] = ventas_global.get(vid, 0) + qty
                 if vid not in ventas_por_loc:
                     ventas_por_loc[vid] = {}
@@ -677,19 +673,19 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
             if node.get("cancelledAt"):
                 continue
             fecha = node.get("createdAt", "")[:10]
-            # Por cada orden, tomar la ÚLTIMA aparición de cada variante (estado final tras ediciones)
-            variant_qtys = {}
+            seen_line_ids = set()
             for li_edge in node.get("lineItems", {}).get("edges", []):
                 li = li_edge["node"]
-                qty_orig    = int(li.get("quantity", 0))
-                qty_nonfulf = int(li.get("nonFulfillableQuantity", 0))
-                qty = qty_orig - qty_nonfulf
+                line_id = li.get("id", "")
+                if line_id in seen_line_ids:
+                    continue
+                seen_line_ids.add(line_id)
+                qty = int(li.get("currentQuantity") or 0)
                 if qty <= 0:
                     continue
-                key = (li.get("title", ""), li.get("variantTitle", ""))
                 prc  = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
                 disc = float((li.get("discountedUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
-                variant_qtys[key] = {
+                rows.append({
                     "fecha":    fecha,
                     "producto": li.get("title", ""),
                     "variante": li.get("variantTitle", ""),
@@ -697,8 +693,7 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
                     "cantidad": qty,
                     "precio":   prc,
                     "total":    (disc or prc) * qty,
-                }
-            rows.extend(variant_qtys.values())
+                })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
         cursor = orders_data["pageInfo"]["endCursor"]
