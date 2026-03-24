@@ -1404,6 +1404,18 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
+    # ── DEBUG VERIFICACIÓN ────────────────────────────────────────────────────
+    with st.expander("🔍 Verificación — Top 20 productos (compara con Shopify)", expanded=False):
+        top_debug = (
+            df_v.groupby("producto")
+            .agg(unidades=("cantidad","sum"), total=("total","sum"))
+            .reset_index()
+            .sort_values("total", ascending=False)
+            .head(20)
+        )
+        top_debug["total_fmt"] = top_debug["total"].apply(fmt_pesos)
+        st.dataframe(top_debug[["producto","unidades","total_fmt"]].rename(columns={"total_fmt":"revenue"}),
+                     use_container_width=True, hide_index=True)
     # ── PARETO 80/20 ──────────────────────────────────────────────────────────
     _seccion("PARETO 80 / 20", f"Qué productos generan el 80% del revenue · {sel_rango}")
 
