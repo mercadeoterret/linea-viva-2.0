@@ -671,6 +671,10 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
     result = (data.get("data") or {}).get("shopifyqlQuery") or {}
     typename = result.get("__typename", "")
 
+    # DEBUG TEMPORAL
+    import json
+    st.warning(f"ShopifyQL typename: `{typename}` | errors: {data.get('errors')} | result keys: {list(result.keys())[:5]}")
+
     if typename != "TableResponse":
         # ShopifyQL no disponible en este plan — fallback a REST
         return _cargar_ventas_rest(_token, fecha_desde, fecha_hasta)
