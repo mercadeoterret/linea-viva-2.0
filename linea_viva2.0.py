@@ -759,8 +759,8 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
                     "variante": li.get("variantTitle", ""),
                     "sku":      li.get("sku", ""),
                     "cantidad": qty,
-                    "precio":   unit / 1.19,
-                    "total":    (unit * qty - disc) / 1.19,
+                    "precio":   unit,
+                    "total":    unit * qty - disc,
                 })
         if not orders_data.get("pageInfo", {}).get("hasNextPage"):
             break
