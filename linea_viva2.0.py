@@ -1106,6 +1106,14 @@ def vista_dashboard(df, locations, token):
                     f"</div>",
                     unsafe_allow_html=True,
                 )
+        st.markdown(
+            "<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-left:3px solid #FFB800;"
+            "border-radius:6px;padding:8px 14px;margin-top:10px;font-size:11px;color:#6B6456;'>"
+            "⚠️ <b>Ventas brutas</b> — precio original × unidades. "
+            "Desfase estimado vs Shopify: <b>5–15%</b> por descuentos y devoluciones."
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
     _seccion("VISIÓN GENERAL", "Segmentos de inventario y productos críticos")
 
@@ -2138,7 +2146,15 @@ def vista_rotacion(df):
 def vista_tendencias(token):
     st.markdown(
         "<div style='font-family:Bebas Neue,sans-serif;font-size:26px;"
-        "letter-spacing:3px;color:#1A1A14;margin-bottom:16px;'>TENDENCIAS</div>",
+        "letter-spacing:3px;color:#1A1A14;margin-bottom:8px;'>TENDENCIAS</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-left:3px solid #FFB800;"
+        "border-radius:6px;padding:8px 14px;margin-bottom:16px;font-size:11px;color:#6B6456;'>"
+        "⚠️ Las tendencias se basan en <b>unidades vendidas</b> — exactas. "
+        "Los valores de revenue son ventas brutas con desfase estimado de <b>5–15%</b> vs Shopify."
+        "</div>",
         unsafe_allow_html=True,
     )
 
