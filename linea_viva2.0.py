@@ -2975,16 +2975,23 @@ def vista_rotacion_segmento(df, rotacion, locations):
     sort_sel = st.radio("Ordenar por", sort_opciones, horizontal=True,
                         key=f"sort_rot_{rotacion}", label_visibility="collapsed")
 
+    # Calcular métricas a nivel producto para ordenar grupos completos
+    prod_stats = sub.groupby("Producto").agg(
+        _accion_min=("_accion", lambda x: x.map(ACCION_ORDEN).min()),
+        _ventas_sum=("Ventas60d", "sum"),
+        _dias_min=("DiasInv_n", lambda x: x.replace(9999, 99999).min()),
+    ).reset_index()
+
     if sort_sel == "Acción (urgencia)":
-        sub["_sort"] = sub["_accion"].map(ACCION_ORDEN).fillna(9)
-        sub = sub.sort_values(["Tipo", "_sort", "Ventas60d"], ascending=[True, True, False])
+        prod_stats = prod_stats.sort_values(["_accion_min", "_ventas_sum"], ascending=[True, False])
     elif sort_sel == "Ventas ↓":
-        sub = sub.sort_values(["Tipo", "Ventas60d"], ascending=[True, False])
+        prod_stats = prod_stats.sort_values("_ventas_sum", ascending=False)
     elif sort_sel == "Días inv. ↑":
-        sub["_dias_sort"] = sub["DiasInv_n"].replace(9999, 99999)
-        sub = sub.sort_values(["Tipo", "_dias_sort"], ascending=[True, True])
+        prod_stats = prod_stats.sort_values("_dias_min", ascending=True)
     else:
-        sub = sub.sort_values(["Tipo", "Producto", "Variante"])
+        prod_stats = prod_stats.sort_values("Producto")
+
+    orden_productos = prod_stats["Producto"].tolist()
 
     for tipo, dt in sub.groupby("Tipo", sort=False):
         st.markdown(
@@ -2994,10 +3001,13 @@ def vista_rotacion_segmento(df, rotacion, locations):
             f"{tipo.upper()} · {dt['Producto'].nunique()} productos</div>",
             unsafe_allow_html=True,
         )
-        for prod, gp in dt.groupby("Producto", sort=False):
-            gp = gp.copy().sort_values("Variante")
-            accion_prod = gp["_accion"].mode()[0]
-            cfg_a  = ACCION_CFG.get(accion_prod, {})
+        # Ordenar productos dentro del tipo según el sort seleccionado
+        prods_en_tipo = [p for p in orden_productos if p in dt["Producto"].values]
+        for prod in prods_en_tipo:
+            gp = dt[dt["Producto"] == prod].copy().sort_values("Variante")
+            accion_prod = gp["_accion"].map(ACCION_ORDEN).min()
+            accion_prod = {v: k for k, v in ACCION_ORDEN.items()}.get(accion_prod, gp["_accion"].mode()[0])
+            cfg_a   = ACCION_CFG.get(accion_prod, {})
             a_color = cfg_a.get("color", "#B8B0A4")
 
             st.markdown(
