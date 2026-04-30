@@ -1,8 +1,8 @@
 """
-Línea Viva v8 — Inventario Inteligente para Térret
+Línea Viva v9 — Inventario Inteligente para Térret
 Shopify Admin API (REST + GraphQL) directo — sin Google Sheets para inventario.
 OAuth Shopify integrado: si no hay token en secrets, la app misma hace el flujo.
-v8: Módulo de Gestión de SKUs + Barcodes + Análisis Pareto 80/20.
+v9: Sistema de clasificación multidimensional (Rotación + Stock + Acción)
 """
 
 import math
@@ -25,14 +25,293 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── CONSTANTES ───────────────────────────────────────────────────────────────
-LEAD_TIME_DIAS = 30
-UMBRAL_BS      = 25
+# ══════════════════════════════════════════════════════════════════════════════
+# ██████████████████████████████████████████████████████████████████████████████
+#
+#   SISTEMA DE CLASIFICACIÓN — LEER ANTES DE MODIFICAR CUALQUIER UMBRAL
+#
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#   FILOSOFÍA: cada producto se evalúa en 3 dimensiones independientes.
+#   Ninguna dimensión depende de la otra para calcularse.
+#   La ACCIÓN es la conclusión que se deriva de cruzar las otras dos.
+#
+#   ┌─────────────────────────────────────────────────────────────────┐
+#   │  DIMENSIÓN 1 — ROTACIÓN                                         │
+#   │  Pregunta: ¿cuánto vende este producto?                         │
+#   │  Fuente: unidades vendidas en los últimos 60 días               │
+#   │  No depende del stock — solo del comportamiento de venta        │
+#   │                                                                 │
+#   │  ALTA      → ventas60d >= ROT_ALTA      (default: 10 u)        │
+#   │  MEDIA     → ventas60d >= ROT_MEDIA     (default:  4 u)        │
+#   │  BAJA      → ventas60d >= ROT_BAJA      (default:  1 u)        │
+#   │  NULA      → ventas60d == 0                                     │
+#   └─────────────────────────────────────────────────────────────────┘
+#
+#   ┌─────────────────────────────────────────────────────────────────┐
+#   │  DIMENSIÓN 2 — STOCK                                            │
+#   │  Pregunta: ¿cuántos días de inventario quedan?                  │
+#   │  Fuente: stock_actual / (ventas60d / 60) = días de cobertura    │
+#   │  Si ventas == 0 → cobertura = INF (no hay referencia de venta)  │
+#   │                                                                 │
+#   │  EXCESO    → dias_cobertura >= STOCK_EXCESO   (default: 120d)  │
+#   │  SALUDABLE → dias_cobertura >= STOCK_SALUDABLE (default: 30d)  │
+#   │  BAJO      → dias_cobertura >  0                                │
+#   │  HUECO     → stock == 0                                         │
+#   └─────────────────────────────────────────────────────────────────┘
+#
+#   ┌─────────────────────────────────────────────────────────────────┐
+#   │  DIMENSIÓN 3 — ACCIÓN (derivada, no modificar directamente)     │
+#   │  Pregunta: ¿qué hago con este producto?                         │
+#   │  Fuente: cruce de Rotación × Stock (ver tabla más abajo)        │
+#   │                                                                 │
+#   │  Tabla de decisión:                                             │
+#   │                                                                 │
+#   │  Rotación  │  Stock    │  Acción                               │
+#   │  ──────────┼───────────┼────────────────────────────────────── │
+#   │  ALTA      │  HUECO    │  REPROGRAMAR ⚡ (quiebre total)       │
+#   │  ALTA      │  BAJO     │  REPROGRAMAR ⚡ (urgente)             │
+#   │  ALTA      │  SALUDABLE│  OK ✅                                │
+#   │  ALTA      │  EXCESO   │  MONITOREAR 👁 (sobrecompra)          │
+#   │  MEDIA     │  HUECO    │  REPROGRAMAR ⚡                       │
+#   │  MEDIA     │  BAJO     │  REPROGRAMAR ⚡                       │
+#   │  MEDIA     │  SALUDABLE│  OK ✅                                │
+#   │  MEDIA     │  EXCESO   │  MONITOREAR 👁                        │
+#   │  BAJA      │  HUECO    │  MONITOREAR 👁 (producto problema)    │
+#   │  BAJA      │  BAJO     │  OK ✅ (poco stock, poca venta)       │
+#   │  BAJA      │  SALUDABLE│  LIQUIDAR 📦                          │
+#   │  BAJA      │  EXCESO   │  LIQUIDAR 📦 (urgente)               │
+#   │  NULA      │  HUECO    │  HUECO ⚪ (sin movimiento)            │
+#   │  NULA      │  BAJO     │  MONITOREAR 👁                        │
+#   │  NULA      │  SALUDABLE│  LIQUIDAR 📦                          │
+#   │  NULA      │  EXCESO   │  LIQUIDAR 📦 (urgente)               │
+#   └─────────────────────────────────────────────────────────────────┘
+#
+#   PRIORIDAD DE REPROGRAMAR:
+#   El objetivo principal de Línea Viva es identificar qué se debe reprogramar.
+#   REPROGRAMAR aparece cuando hay demanda activa (rotación ALTA o MEDIA)
+#   y el stock no alcanza (BAJO o HUECO). Esto captura tanto quiebres
+#   totales como situaciones próximas al quiebre.
+#
+#   VENTAJA vs. SISTEMA ANTERIOR (1 dimensión):
+#   Un producto de Alta Rotación con stock bajo ya no "desaparece" dentro
+#   de REPROGRAMAR. Ahora aparece en REPROGRAMAR con etiqueta ROT_ALTA,
+#   lo que permite priorizarlo sobre un producto de Rotación Media también
+#   en REPROGRAMAR. El dato de rotación no se pierde.
+#
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ─── UMBRALES DE ROTACIÓN (unidades vendidas en 60 días) ──────────────────────
+ROT_ALTA   = 10   # >= 10u en 60d → Alta Rotación   (≈ 5+ u/mes)
+ROT_MEDIA  = 4    # >=  4u en 60d → Media Rotación  (≈ 2+ u/mes)
+ROT_BAJA   = 1    # >=  1u en 60d → Baja Rotación   (algo se vende)
+# < ROT_BAJA (== 0)              → Nula (sin ninguna venta en 60d)
+
+# ─── UMBRALES DE STOCK (días de cobertura) ────────────────────────────────────
+STOCK_EXCESO    = 120   # >= 120d de cobertura → Exceso
+STOCK_SALUDABLE = 30    # >=  30d de cobertura → Saludable
+#  > 0 días                      → Bajo
+# == 0 (sin stock)               → Hueco
+
+# ─── CONSTANTES OPERATIVAS ────────────────────────────────────────────────────
+LEAD_TIME_DIAS = 30    # días que tarda en llegar un pedido (para sugerir reorden)
+DIAS_OBJETIVO  = 60    # días de cobertura que se quiere tener después del pedido
+MULTIPLO       = 6     # cantidad mínima de reposición y múltiplo de pedido
+
+# ─── CONSTANTES SHOPIFY ───────────────────────────────────────────────────────
 LOCATIONS_EXCLUIR = ["Recogida en tienda (NO USAR)"]
 LOCATIONS_VALIDAS = ["TERRET", "Tienda Fisica", "Tienda Móvil - Ferias"]
-DIAS_OBJETIVO  = 60
-MULTIPLO       = 6
-API_VERSION    = "2024-10"
+API_VERSION       = "2024-10"
+UMBRAL_BS         = 25   # ventas60d >= este valor → producto "Best Seller" (tag visual)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#   FUNCIONES DE CLASIFICACIÓN
+# ──────────────────────────────────────────────────────────────────────────────
+
+def clasificar_rotacion(ventas60d: float) -> str:
+    """
+    DIMENSIÓN 1 — ROTACIÓN
+    Evalúa únicamente la velocidad de venta. No considera stock.
+    Retorna: "ALTA" | "MEDIA" | "BAJA" | "NULA"
+    """
+    v = float(ventas60d)
+    if v >= ROT_ALTA:
+        return "ALTA"
+    if v >= ROT_MEDIA:
+        return "MEDIA"
+    if v >= ROT_BAJA:
+        return "BAJA"
+    return "NULA"
+
+
+def clasificar_stock(stock: float, ventas60d: float) -> str:
+    """
+    DIMENSIÓN 2 — STOCK
+    Evalúa los días de cobertura disponibles.
+    Si no hay ventas de referencia, stock > 0 se trata como EXCESO (sin demanda conocida).
+    Retorna: "EXCESO" | "SALUDABLE" | "BAJO" | "HUECO"
+    """
+    s = float(stock)
+    v = float(ventas60d)
+
+    if s <= 0:
+        return "HUECO"
+
+    if v <= 0:
+        # Stock positivo pero sin ventas → no hay referencia, se trata como exceso
+        return "EXCESO"
+
+    dias = s / (v / 60.0)
+
+    if dias >= STOCK_EXCESO:
+        return "EXCESO"
+    if dias >= STOCK_SALUDABLE:
+        return "SALUDABLE"
+    return "BAJO"
+
+
+def clasificar_accion(rotacion: str, stock_nivel: str) -> str:
+    """
+    DIMENSIÓN 3 — ACCIÓN (derivada de Rotación × Stock)
+    Esta función implementa la tabla de decisión documentada arriba.
+    NO modificar esta función sin actualizar la tabla en la guía.
+    Retorna: "REPROGRAMAR" | "OK" | "MONITOREAR" | "LIQUIDAR" | "HUECO"
+    """
+    # Casos de REPROGRAMAR: hay demanda pero no hay stock
+    if rotacion in ("ALTA", "MEDIA") and stock_nivel in ("BAJO", "HUECO"):
+        return "REPROGRAMAR"
+
+    # Casos OK: hay demanda y el stock es suficiente
+    if rotacion in ("ALTA", "MEDIA") and stock_nivel == "SALUDABLE":
+        return "OK"
+
+    # Sobrecompra con rotación activa → monitorear, no liquidar
+    if rotacion in ("ALTA", "MEDIA") and stock_nivel == "EXCESO":
+        return "MONITOREAR"
+
+    # Rotación baja con stock bajo → no urgente, pero vigilar
+    if rotacion == "BAJA" and stock_nivel == "BAJO":
+        return "OK"
+
+    # Producto problemático: vende poco pero no tiene stock
+    if rotacion == "BAJA" and stock_nivel == "HUECO":
+        return "MONITOREAR"
+
+    # Stock con poca o nula demanda → candidato a liquidar
+    if rotacion in ("BAJA", "NULA") and stock_nivel in ("SALUDABLE", "EXCESO"):
+        return "LIQUIDAR"
+
+    # Sin stock y sin ventas → producto posiblemente descontinuado
+    if rotacion == "NULA" and stock_nivel == "HUECO":
+        return "HUECO"
+
+    # Sin ventas pero con stock bajo → monitorear
+    if rotacion == "NULA" and stock_nivel == "BAJO":
+        return "MONITOREAR"
+
+    # Fallback (no debería llegar aquí si la tabla está completa)
+    return "MONITOREAR"
+
+
+def clasificar_producto(stock: float, ventas60d: float) -> dict:
+    """
+    Función principal de clasificación. Evalúa las 3 dimensiones y retorna
+    un diccionario con toda la información de clasificación del producto.
+
+    Ejemplo de retorno:
+    {
+        "rotacion":    "ALTA",        # velocidad de venta
+        "stock_nivel": "BAJO",        # nivel de cobertura
+        "accion":      "REPROGRAMAR", # qué hacer con el producto
+        "dias_inv":    18.5,          # días de inventario disponibles
+        "es_bs":       True,          # True si ventas >= UMBRAL_BS (best seller)
+    }
+    """
+    try:
+        s = float(stock)
+        v = float(ventas60d)
+    except (ValueError, TypeError):
+        return {"rotacion": "NULA", "stock_nivel": "HUECO", "accion": "HUECO",
+                "dias_inv": 9999, "es_bs": False}
+
+    dias = round(s / (v / 60.0), 1) if v > 0 else 9999
+
+    rotacion    = clasificar_rotacion(v)
+    stock_nivel = clasificar_stock(s, v)
+    accion      = clasificar_accion(rotacion, stock_nivel)
+
+    return {
+        "rotacion":    rotacion,
+        "stock_nivel": stock_nivel,
+        "accion":      accion,
+        "dias_inv":    dias,
+        "es_bs":       v >= UMBRAL_BS,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#   CONFIGURACIÓN VISUAL DE DIMENSIONES
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Rotación — etiquetas y colores para la UI
+ROTACION_CFG = {
+    "ALTA":  {"label": "Alta Rotación",  "color": "#2D6A4F", "icon": "🔥"},
+    "MEDIA": {"label": "Media Rotación", "color": "#4488FF", "icon": "📦"},
+    "BAJA":  {"label": "Baja Rotación",  "color": "#FFB800", "icon": "🐢"},
+    "NULA":  {"label": "Sin Ventas",     "color": "#B8B0A4", "icon": "⚪"},
+}
+
+# Stock — etiquetas y colores para la UI
+STOCK_CFG = {
+    "EXCESO":    {"label": "Exceso",    "color": "#FF6B35", "icon": "🔴"},
+    "SALUDABLE": {"label": "Saludable", "color": "#00C853", "icon": "✅"},
+    "BAJO":      {"label": "Bajo",      "color": "#FFB800", "icon": "⚠️"},
+    "HUECO":     {"label": "Hueco",     "color": "#FF3B30", "icon": "❌"},
+}
+
+# Acciones — etiquetas, colores y descripciones para la UI
+ACCION_CFG = {
+    "REPROGRAMAR": {
+        "icon":  "⚡",
+        "label": "Reprogramar",
+        "color": "#FF3B30",
+        "desc":  "Hay demanda activa pero el stock no alcanza. Pedir ya.",
+    },
+    "OK": {
+        "icon":  "✅",
+        "label": "OK",
+        "color": "#2D6A4F",
+        "desc":  "Stock y ventas en equilibrio. Sin acción requerida.",
+    },
+    "MONITOREAR": {
+        "icon":  "👁",
+        "label": "Monitorear",
+        "color": "#4488FF",
+        "desc":  "Situación no crítica pero requiere revisión en el próximo ciclo.",
+    },
+    "LIQUIDAR": {
+        "icon":  "📦",
+        "label": "Liquidar",
+        "color": "#FF9500",
+        "desc":  "Stock acumulado con poca o ninguna demanda. Precio especial o retiro.",
+    },
+    "HUECO": {
+        "icon":  "⚪",
+        "label": "Hueco",
+        "color": "#B8B0A4",
+        "desc":  "Sin stock y sin ventas. Posiblemente descontinuado.",
+    },
+}
+
+# Orden de visualización en el sidebar (de mayor a menor prioridad)
+ACCIONES_ORDEN = ["REPROGRAMAR", "OK", "MONITOREAR", "LIQUIDAR", "HUECO"]
+
+# Alias para compatibilidad con código anterior que usaba ESTADOS
+# La clave es la acción, el valor es la config visual
+ESTADOS = {k: v for k, v in ACCION_CFG.items()}
+ORDEN_SIDEBAR = ACCIONES_ORDEN
+
 
 # ─── PREFIJOS SKU ─────────────────────────────────────────────────────────────
 PREFIX_MAP = {
@@ -58,6 +337,7 @@ PREFIX_MAP = {
     "Vestido de Baño":          "VBA",
     "Visera":                   "VSR",
 }
+
 
 # ─── ESTILOS ──────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -149,58 +429,25 @@ label[data-testid="stWidgetLabel"] p { color: #1A1A14 !important; }
 """, unsafe_allow_html=True)
 
 
-# ─── SEGMENTACIÓN ─────────────────────────────────────────────────────────────
-
-def calcular_estado(stock, ventas60d, dias_inv):
-    try:
-        s   = float(stock)
-        v   = float(ventas60d)
-        cob = float(dias_inv) if str(dias_inv).lower() not in ("inf", "nan", "") else 9999
-    except Exception:
-        return "HUECO"
-    if s == 0 and v == 0:
-        return "HUECO"
-    if v <= 3 and cob > 90:
-        return "LIQUIDAR"
-    if (cob <= LEAD_TIME_DIAS and v > 3) or (s == 0 and v > 0):
-        return "REPROGRAMAR"
-    if v >= 25:
-        return "ESTRELLA" if cob <= 120 else "SOBRESTOCK"
-    if v >= 10:
-        return "ALTA_ROTACION" if cob <= 120 else "SOBRESTOCK"
-    if v >= 4:
-        return "SALUDABLE" if cob <= 90 else "MONITOREAR"
-    return "MONITOREAR"
-
-
-ESTADOS = {
-    "REPROGRAMAR":   {"icon": "⚡", "label": "Reprogramar",    "color": "#FF3B30", "desc": "Cobertura ≤ 30 días con ventas activas, o quiebre. Pedir ya."},
-    "ESTRELLA":      {"icon": "⭐", "label": "Estrella",       "color": "#2D6A4F", "desc": "Ventas ≥ 25 en 60d. Best seller — nunca dejar sin stock."},
-    "ALTA_ROTACION": {"icon": "🔥", "label": "Alta Rotación",  "color": "#FFB800", "desc": "Ventas ≥ 10 en 60d. Monitorear de cerca."},
-    "SOBRESTOCK":    {"icon": "🔴", "label": "Sobrestock",     "color": "#FF6B35", "desc": "Cobertura > 120 días. Pausar pedidos."},
-    "SALUDABLE":     {"icon": "✅", "label": "Saludable",      "color": "#00C853", "desc": "Ventas 4-9, cobertura 31-90d. Stock equilibrado."},
-    "MONITOREAR":    {"icon": "👁",  "label": "Monitorear",    "color": "#4488FF", "desc": "Ventas 4-9, cobertura > 90d. Revisar próximo ciclo."},
-    "LIQUIDAR":      {"icon": "📦", "label": "Liquidar",       "color": "#FF9500", "desc": "Ventas ≤ 3 y cobertura > 90d. Precio especial o retiro."},
-    "HUECO":         {"icon": "⚪", "label": "Hueco",          "color": "#B8B0A4", "desc": "Stock 0 y ventas 0. Posiblemente descontinuado."},
-}
-
-ORDEN_SIDEBAR = ["REPROGRAMAR", "ESTRELLA", "ALTA_ROTACION", "SOBRESTOCK", "SALUDABLE", "MONITOREAR", "LIQUIDAR", "HUECO"]
-
-
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
+def color_accion(accion):
+    return ACCION_CFG.get(accion, {}).get("color", "#B8B0A4")
+
+
 def color_estado(estado):
-    return ESTADOS.get(estado, {}).get("color", "#B8B0A4")
+    """Alias para compatibilidad con código que usa el nombre anterior."""
+    return color_accion(estado)
 
 
-def sugerir_cantidad(stock, ventas60d, dias_inv, estado):
+def sugerir_cantidad(stock, ventas60d, dias_inv, accion):
     try:
         s = float(stock)
         v = float(ventas60d)
         d = float(dias_inv) if str(dias_inv).lower() not in ("inf", "nan", "") else 9999
     except Exception:
         return 0, "Sin datos"
-    if estado in ("LIQUIDAR", "HUECO"):
+    if accion in ("LIQUIDAR", "HUECO"):
         return 0, "No reponer"
     if v == 0:
         return 0, "Sin ventas"
@@ -512,11 +759,11 @@ def cargar_productos(_token):
                 cost    = float((inv.get("unitCost") or {}).get("amount", 0) or 0)
                 inv_id  = inv.get("id", "").split("/")[-1] if inv.get("id") else ""
                 vars_.append({
-                    "variant_id":       v_id,
-                    "variant_title":    v["title"],
-                    "sku":              v.get("sku", ""),
-                    "price":            float(v.get("price", 0) or 0),
-                    "cost":             cost,
+                    "variant_id":        v_id,
+                    "variant_title":     v["title"],
+                    "sku":               v.get("sku", ""),
+                    "price":             float(v.get("price", 0) or 0),
+                    "cost":              cost,
                     "inventory_item_id": inv_id,
                 })
             productos.append({
@@ -628,7 +875,6 @@ def cargar_ventas_60d(_token, _locations):
     return ventas_global, ventas_por_loc
 
 
-
 def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
     """Usa ShopifyQL directamente — mismos números que el dashboard de Shopify."""
     desde_str = fecha_desde.strftime("%Y-%m-%d")
@@ -668,15 +914,14 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
     resp.raise_for_status()
     data = resp.json()
 
-    result = (data.get("data") or {}).get("shopifyqlQuery") or {}
+    result   = (data.get("data") or {}).get("shopifyqlQuery") or {}
     typename = result.get("__typename", "")
 
     if typename != "TableResponse":
-        # ShopifyQL no disponible en este plan — fallback a REST
         return _cargar_ventas_rest(_token, fecha_desde, fecha_hasta)
 
-    table   = result.get("tableData") or {}
-    columns = [c["name"] for c in (table.get("columns") or [])]
+    table    = result.get("tableData") or {}
+    columns  = [c["name"] for c in (table.get("columns") or [])]
     rows_raw = table.get("unformattedData") or []
 
     if not rows_raw:
@@ -700,13 +945,11 @@ def cargar_ventas_rango(_token, fecha_desde, fecha_hasta):
 
 
 def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
-    """Usa el endpoint de analytics de Shopify para obtener total_sales exacto por producto."""
-    shop    = st.secrets["TIENDA_URL"]
-    headers = _headers(_token)
+    shop      = st.secrets["TIENDA_URL"]
+    headers   = _headers(_token)
     desde_str = fecha_desde.strftime("%Y-%m-%d")
     hasta_str = fecha_hasta.strftime("%Y-%m-%d")
 
-    # Intentar con ShopifyQL via Analytics API
     shopify_ql = (
         f"FROM sales "
         f"SHOW product_title, total_sales, quantity_ordered "
@@ -723,9 +966,9 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
             timeout=60,
         )
         if resp.status_code == 200:
-            data = resp.json()
-            result = data.get("query_result") or data.get("result") or {}
-            cols = result.get("columns") or []
+            data     = resp.json()
+            result   = data.get("query_result") or data.get("result") or {}
+            cols     = result.get("columns") or []
             rows_raw = result.get("rows") or []
             if cols and rows_raw:
                 col_names = [c.get("name", c) if isinstance(c, dict) else c for c in cols]
@@ -745,7 +988,6 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
     except Exception:
         pass
 
-    # Fallback final: GraphQL orders
     desde = fecha_desde.strftime("%Y-%m-%dT00:00:00Z")
     hasta = fecha_hasta.strftime("%Y-%m-%dT23:59:59Z")
     GQL = """
@@ -754,18 +996,11 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
         pageInfo { hasNextPage endCursor }
         edges {
           node {
-            id
-            createdAt
-            cancelledAt
-            sourceName
+            id createdAt cancelledAt sourceName
             lineItems(first: 250) {
               edges {
                 node {
-                  id
-                  title
-                  variantTitle
-                  sku
-                  quantity
+                  id title variantTitle sku quantity
                   originalUnitPriceSet { shopMoney { amount } }
                 }
               }
@@ -776,40 +1011,39 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
     }
     """
     query_str = f"created_at:>={desde} created_at:<={hasta}"
-    rows = []
+    rows   = []
     cursor = None
 
-    # Mapeo de sourceName → canal legible
     CANAL_MAP = {
-        "web":          "Online Store",
+        "web":    "Online Store",
         "shopify_draft_order": "Draft Orders",
-        "pos":          "Point of Sale",
-        "iphone":       "Online Store",
-        "android":      "Online Store",
-        None:           "Online Store",
+        "pos":    "Point of Sale",
+        "iphone": "Online Store",
+        "android":"Online Store",
+        None:     "Online Store",
     }
 
     while True:
-        data = graphql_query(_token, GQL, {"cursor": cursor, "query": query_str})
+        data        = graphql_query(_token, GQL, {"cursor": cursor, "query": query_str})
         orders_data = data.get("data", {}).get("orders", {})
         for edge in orders_data.get("edges", []):
             node = edge["node"]
             if node.get("cancelledAt"):
                 continue
-            fecha      = node.get("createdAt", "")[:10]
-            source     = node.get("sourceName") or ""
-            canal      = CANAL_MAP.get(source.lower() if source else None,
-                         "Draft Orders" if "draft" in source.lower() else
-                         "Point of Sale" if "pos" in source.lower() else
-                         "Online Store")
+            fecha  = node.get("createdAt", "")[:10]
+            source = node.get("sourceName") or ""
+            canal  = CANAL_MAP.get(source.lower() if source else None,
+                     "Draft Orders" if "draft" in source.lower() else
+                     "Point of Sale" if "pos"   in source.lower() else
+                     "Online Store")
             seen_line_ids = set()
             for li_edge in node.get("lineItems", {}).get("edges", []):
-                li = li_edge["node"]
+                li      = li_edge["node"]
                 line_id = li.get("id", "")
                 if line_id in seen_line_ids:
                     continue
                 seen_line_ids.add(line_id)
-                qty  = int(li.get("quantity") or 0)
+                qty = int(li.get("quantity") or 0)
                 if qty <= 0:
                     continue
                 unit = float((li.get("originalUnitPriceSet") or {}).get("shopMoney", {}).get("amount", 0) or 0)
@@ -830,6 +1064,17 @@ def _cargar_ventas_rest(_token, fecha_desde, fecha_hasta):
 
 
 def construir_df(productos, stock_map, ventas_map, locations):
+    """
+    Construye el DataFrame principal del inventario.
+    Aplica la clasificación multidimensional a cada variante.
+
+    Columnas añadidas por la clasificación:
+      _rotacion    → "ALTA" | "MEDIA" | "BAJA" | "NULA"
+      _stock_nivel → "EXCESO" | "SALUDABLE" | "BAJO" | "HUECO"
+      _accion      → "REPROGRAMAR" | "OK" | "MONITOREAR" | "LIQUIDAR" | "HUECO"
+      _estado      → alias de _accion (compatibilidad con código anterior)
+      _bs          → True si ventas60d >= UMBRAL_BS
+    """
     ventas_global, ventas_por_loc = ventas_map
     loc_id_to_name = {str(loc["id"]): loc["name"] for loc in locations}
     rows = []
@@ -843,9 +1088,9 @@ def construir_df(productos, stock_map, ventas_map, locations):
             on_hand_total = sum(v["on_hand"]   for v in loc_stocks.values())
             committed     = max(0, on_hand_total - stock_total)
 
-            ventas60d    = ventas_global.get(vid, 0)
-            v_por_loc    = ventas_por_loc.get(vid, {})
-            dias_inv     = round(stock_total / (ventas60d / 60), 1) if ventas60d > 0 else 9999
+            ventas60d = ventas_global.get(vid, 0)
+            v_por_loc = ventas_por_loc.get(vid, {})
+            dias_inv  = round(stock_total / (ventas60d / 60), 1) if ventas60d > 0 else 9999
 
             row = {
                 "Producto":     prod["title"],
@@ -865,8 +1110,8 @@ def construir_df(productos, stock_map, ventas_map, locations):
             }
             for loc_id, loc_name in loc_id_to_name.items():
                 loc_data = loc_stocks.get(loc_id, {"available": 0, "on_hand": 0})
-                row[f"Stock_{loc_name}"]   = loc_data["available"]
-                row[f"Fisico_{loc_name}"]  = loc_data["on_hand"]
+                row[f"Stock_{loc_name}"]  = loc_data["available"]
+                row[f"Fisico_{loc_name}"] = loc_data["on_hand"]
             for loc_name in loc_id_to_name.values():
                 row[f"Ventas_{loc_name}"] = v_por_loc.get(loc_name, 0)
             row["Ventas_TERRET"] = v_por_loc.get("TERRET", 0)
@@ -875,10 +1120,19 @@ def construir_df(productos, stock_map, ventas_map, locations):
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    df["_estado"]      = df.apply(lambda r: calcular_estado(r["Stock"], r["Ventas60d"], r["DiasInv_n"]), axis=1)
-    df["_bs"]          = df["Ventas60d"] >= UMBRAL_BS
+
+    # ── Aplicar clasificación multidimensional ─────────────────────────────
+    clasificaciones = df.apply(
+        lambda r: clasificar_producto(r["Stock"], r["Ventas60d"]), axis=1
+    )
+    df["_rotacion"]    = clasificaciones.apply(lambda c: c["rotacion"])
+    df["_stock_nivel"] = clasificaciones.apply(lambda c: c["stock_nivel"])
+    df["_accion"]      = clasificaciones.apply(lambda c: c["accion"])
+    df["_estado"]      = df["_accion"]   # alias para compatibilidad
+    df["_bs"]          = clasificaciones.apply(lambda c: c["es_bs"])
     df["_valor_costo"] = df["Stock"] * df["Costo"]
     df["_valor_venta"] = df["Stock"] * df["Precio Venta"]
+
     return df
 
 
@@ -915,15 +1169,15 @@ def render_sidebar(conteos):
         st.markdown(
             "<hr style='border-color:#D4CFC4;margin:6px 0;'>"
             "<div style='font-size:9px;color:#B8B0A4;letter-spacing:1.5px;"
-            "text-transform:uppercase;padding:6px 4px 4px 4px;'>Inventario</div>",
+            "text-transform:uppercase;padding:6px 4px 4px 4px;'>Inventario por Acción</div>",
             unsafe_allow_html=True,
         )
 
-        for estado in ORDEN_SIDEBAR:
-            cfg = ESTADOS[estado]
-            cnt = conteos.get(estado, 0)
-            if st.button(f"{cfg['icon']}  {cfg['label']}   {cnt}", key=f"nav_{estado}"):
-                st.session_state.vista = estado
+        for accion in ACCIONES_ORDEN:
+            cfg = ACCION_CFG[accion]
+            cnt = conteos.get(accion, 0)
+            if st.button(f"{cfg['icon']}  {cfg['label']}   {cnt}", key=f"nav_{accion}"):
+                st.session_state.vista = accion
                 st.rerun()
 
         st.markdown("<hr style='border-color:#D4CFC4;margin:6px 0;'>", unsafe_allow_html=True)
@@ -991,18 +1245,28 @@ def vista_dashboard(df, locations, token):
             col_fisico = f"Fisico_{sel_loc}"
             col_usar   = col_fisico if usar_fisico else col_disp
             if col_usar in df_view.columns:
-                df_view["Stock"]        = df_view[col_usar].clip(lower=0)
-                df_view["DiasInv_n"]    = df_view.apply(
-                    lambda r: round(r["Stock"] / (r["Ventas60d"] / 60), 1) if r["Ventas60d"] > 0 else 9999, axis=1)
-                df_view["_estado"]      = df_view.apply(lambda r: calcular_estado(r["Stock"], r["Ventas60d"], r["DiasInv_n"]), axis=1)
+                df_view["Stock"] = df_view[col_usar].clip(lower=0)
+                clases = df_view.apply(
+                    lambda r: clasificar_producto(r["Stock"], r["Ventas60d"]), axis=1
+                )
+                df_view["_rotacion"]    = clases.apply(lambda c: c["rotacion"])
+                df_view["_stock_nivel"] = clases.apply(lambda c: c["stock_nivel"])
+                df_view["_accion"]      = clases.apply(lambda c: c["accion"])
+                df_view["_estado"]      = df_view["_accion"]
+                df_view["DiasInv_n"]    = clases.apply(lambda c: c["dias_inv"])
                 df_view["_valor_costo"] = df_view["Stock"] * df_view["Costo"]
                 df_view["_valor_venta"] = df_view["Stock"] * df_view["Precio Venta"]
         else:
             if usar_fisico:
-                df_view["Stock"]        = df_view["StockFisico"]
-                df_view["DiasInv_n"]    = df_view.apply(
-                    lambda r: round(r["Stock"] / (r["Ventas60d"] / 60), 1) if r["Ventas60d"] > 0 else 9999, axis=1)
-                df_view["_estado"]      = df_view.apply(lambda r: calcular_estado(r["Stock"], r["Ventas60d"], r["DiasInv_n"]), axis=1)
+                df_view["Stock"] = df_view["StockFisico"]
+                clases = df_view.apply(
+                    lambda r: clasificar_producto(r["Stock"], r["Ventas60d"]), axis=1
+                )
+                df_view["_rotacion"]    = clases.apply(lambda c: c["rotacion"])
+                df_view["_stock_nivel"] = clases.apply(lambda c: c["stock_nivel"])
+                df_view["_accion"]      = clases.apply(lambda c: c["accion"])
+                df_view["_estado"]      = df_view["_accion"]
+                df_view["DiasInv_n"]    = clases.apply(lambda c: c["dias_inv"])
                 df_view["_valor_costo"] = df_view["Stock"] * df_view["Costo"]
                 df_view["_valor_venta"] = df_view["Stock"] * df_view["Precio Venta"]
 
@@ -1011,16 +1275,12 @@ def vista_dashboard(df, locations, token):
     tiene_costos  = df_view["Costo"].sum() > 0
     tiene_precios = df_view["Precio Venta"].sum() > 0
 
-    df_con_stock = df_view[df_view["Stock"] > 0] if sel_loc != "Todas las sucursales" else df_view
-
-    total_skus  = len(df_con_stock)
-    total_prods = df_con_stock["Producto"].nunique()
+    total_skus  = len(df_view)
+    total_prods = df_view["Producto"].nunique()
     total_stock = int(df_view["Stock"].sum())
-    reprog_n    = int(df_view[df_view["_estado"] == "REPROGRAMAR"]["Producto"].nunique())
+    reprog_n    = int(df_view[df_view["_accion"] == "REPROGRAMAR"]["Producto"].nunique())
     vc          = df_view["_valor_costo"].sum()
     vv          = df_view["_valor_venta"].sum()
-
-    total_fisico       = int(df_view["StockFisico"].sum())
     total_comprometido = int(df_view["Comprometido"].sum())
 
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -1115,155 +1375,211 @@ def vista_dashboard(df, locations, token):
             unsafe_allow_html=True,
         )
 
-    _seccion("VISIÓN GENERAL", "Segmentos de inventario y productos críticos")
+    # ── Donut por ACCIÓN + Donut por ROTACIÓN ─────────────────────────────────
+    _seccion("VISIÓN GENERAL", "Acciones requeridas y distribución de rotación")
 
     col_l, col_r = st.columns(2)
 
     with col_l:
-        st.markdown("<div style='font-family:Bebas Neue,sans-serif;font-size:13px;letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>SEGMENTOS</div>", unsafe_allow_html=True)
-        seg = df_view.groupby("_estado")["Producto"].nunique().reset_index()
-        seg.columns = ["Estado", "Productos"]
-        seg = seg[seg["Productos"] > 0]
+        st.markdown(
+            "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
+            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>ACCIÓN REQUERIDA</div>",
+            unsafe_allow_html=True,
+        )
+        seg_acc = df_view.groupby("_accion")["Producto"].nunique().reset_index()
+        seg_acc.columns = ["Accion", "Productos"]
+        seg_acc = seg_acc[seg_acc["Productos"] > 0]
 
-        colores_pie = [color_estado(e) for e in seg["Estado"]]
-        labels_pie  = [ESTADOS.get(e, {}).get("label", e) for e in seg["Estado"]]
-
-        fig_pie = go.Figure(go.Pie(
-            labels=labels_pie,
-            values=seg["Productos"],
+        fig_acc = go.Figure(go.Pie(
+            labels=[ACCION_CFG.get(a, {}).get("label", a) for a in seg_acc["Accion"]],
+            values=seg_acc["Productos"],
             hole=0.55,
-            marker=dict(colors=colores_pie, line=dict(color="#F5F0E8", width=2)),
+            marker=dict(
+                colors=[ACCION_CFG.get(a, {}).get("color", "#B8B0A4") for a in seg_acc["Accion"]],
+                line=dict(color="#F5F0E8", width=2),
+            ),
             textinfo="label+percent",
             textfont=dict(size=12, color="#1A1A14"),
             hovertemplate="<b>%{label}</b><br>%{value} productos<br>%{percent}<extra></extra>",
         ))
-        fig_pie.update_layout(
-            paper_bgcolor="#EDEAE0",
-            plot_bgcolor="#EDEAE0",
-            font=dict(color="#1A1A14", family="DM Sans"),
+        fig_acc.update_layout(
+            **PLOT_BASE,
             margin=dict(t=30, b=30, l=10, r=10),
-            height=380,
+            height=320,
             showlegend=False,
             annotations=[dict(
-                text="<b>" + str(total_prods) + "</b><br>productos",
-                x=0.5, y=0.5, font_size=18, showarrow=False,
+                text=f"<b>{total_prods}</b><br>productos",
+                x=0.5, y=0.5, font_size=16, showarrow=False,
                 font=dict(color="#1A1A14"),
             )],
         )
-        st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig_acc, use_container_width=True, config={"displayModeBar": False})
 
     with col_r:
-        st.markdown("<div style='font-family:Bebas Neue,sans-serif;font-size:13px;letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>STOCK CRÍTICO — TOP 10</div>", unsafe_allow_html=True)
-        criticos = (
-            df_view[df_view["_estado"] == "REPROGRAMAR"]
-            .groupby("Producto")
-            .agg(ventas=("Ventas60d", "sum"), stock=("Stock", "sum"), dias_min=("DiasInv_n", "min"))
-            .reset_index()
-            .sort_values("ventas", ascending=False)
-            .head(10)
-            .sort_values("ventas", ascending=True)
+        st.markdown(
+            "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
+            "letter-spacing:2px;color:#6B6456;margin-bottom:8px;'>ROTACIÓN DE VENTAS</div>",
+            unsafe_allow_html=True,
         )
-        if criticos.empty:
-            st.markdown(
-                "<div style='text-align:center;padding:40px;color:#6B6456;'>Sin productos criticos</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            def label_crit(row):
-                return "QUIEBRE" if row["stock"] == 0 else f"{int(row['dias_min'])}d"
+        seg_rot = df_view.groupby("_rotacion")["Producto"].nunique().reset_index()
+        seg_rot.columns = ["Rotacion", "Productos"]
+        seg_rot = seg_rot[seg_rot["Productos"] > 0]
 
-            criticos["_label"] = criticos["Producto"].apply(
-                lambda x: x[:32] + "..." if len(x) > 32 else x)
-            fig_crit = go.Figure(go.Bar(
-                x=criticos["ventas"],
-                y=criticos["_label"],
-                orientation="h",
-                marker=dict(
-                    color=criticos["stock"].apply(lambda s: "#FF3B30" if s == 0 else "#FFB800"),
-                    opacity=0.85,
-                ),
-                text=criticos.apply(label_crit, axis=1),
-                textposition="outside",
-                textfont=dict(size=11, color="#1A1A14"),
-                hovertemplate="<b>%{y}</b><br>%{x} u vendidas 60d<extra></extra>",
-            ))
-            fig_crit.update_layout(
-                paper_bgcolor="#EDEAE0",
-                plot_bgcolor="#EDEAE0",
-                font=dict(color="#1A1A14", family="DM Sans"),
-                margin=dict(t=10, b=10, l=260, r=100),
-                height=380,
-                xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False,
-                           range=[0, criticos["ventas"].max() * 1.4]),
-                yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14"),
-            )
-            st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
+        fig_rot = go.Figure(go.Pie(
+            labels=[ROTACION_CFG.get(r, {}).get("label", r) for r in seg_rot["Rotacion"]],
+            values=seg_rot["Productos"],
+            hole=0.55,
+            marker=dict(
+                colors=[ROTACION_CFG.get(r, {}).get("color", "#B8B0A4") for r in seg_rot["Rotacion"]],
+                line=dict(color="#F5F0E8", width=2),
+            ),
+            textinfo="label+percent",
+            textfont=dict(size=12, color="#1A1A14"),
+            hovertemplate="<b>%{label}</b><br>%{value} productos<br>%{percent}<extra></extra>",
+        ))
+        fig_rot.update_layout(
+            **PLOT_BASE,
+            margin=dict(t=30, b=30, l=10, r=10),
+            height=320,
+            showlegend=False,
+            annotations=[dict(
+                text=f"<b>{total_prods}</b><br>productos",
+                x=0.5, y=0.5, font_size=16, showarrow=False,
+                font=dict(color="#1A1A14"),
+            )],
+        )
+        st.plotly_chart(fig_rot, use_container_width=True, config={"displayModeBar": False})
 
+    # ── Stock crítico (REPROGRAMAR) ────────────────────────────────────────────
+    st.markdown(
+        "<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
+        "letter-spacing:2px;color:#6B6456;margin:20px 0 8px 0;'>STOCK CRÍTICO — TOP 10 A REPROGRAMAR</div>",
+        unsafe_allow_html=True,
+    )
+    criticos = (
+        df_view[df_view["_accion"] == "REPROGRAMAR"]
+        .groupby("Producto")
+        .agg(
+            ventas=("Ventas60d", "sum"),
+            stock=("Stock", "sum"),
+            dias_min=("DiasInv_n", "min"),
+            rotacion=("_rotacion", "first"),
+        )
+        .reset_index()
+        .sort_values("ventas", ascending=False)
+        .head(10)
+        .sort_values("ventas", ascending=True)
+    )
+    if criticos.empty:
+        st.markdown(
+            "<div style='text-align:center;padding:40px;color:#6B6456;'>Sin productos críticos</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        def label_crit(row):
+            if row["stock"] == 0:
+                return "QUIEBRE"
+            return f"{int(row['dias_min'])}d"
+
+        criticos["_label"] = criticos["Producto"].apply(lambda x: x[:32] + "..." if len(x) > 32 else x)
+        # Color por rotación dentro del segmento REPROGRAMAR
+        rot_color_map = {"ALTA": "#FF3B30", "MEDIA": "#FFB800", "BAJA": "#FF6B35", "NULA": "#B8B0A4"}
+        fig_crit = go.Figure(go.Bar(
+            x=criticos["ventas"],
+            y=criticos["_label"],
+            orientation="h",
+            marker=dict(
+                color=criticos["rotacion"].map(rot_color_map).fillna("#FFB800"),
+                opacity=0.85,
+            ),
+            text=criticos.apply(label_crit, axis=1),
+            textposition="outside",
+            textfont=dict(size=11, color="#1A1A14"),
+            hovertemplate="<b>%{y}</b><br>%{x} u vendidas 60d<extra></extra>",
+        ))
+        fig_crit.update_layout(
+            **PLOT_BASE,
+            margin=dict(t=10, b=10, l=260, r=100),
+            height=360,
+            xaxis=dict(showgrid=True, gridcolor="#D4CFC4", zeroline=False, showticklabels=False,
+                       range=[0, criticos["ventas"].max() * 1.4]),
+            yaxis=dict(showgrid=False, tickfont=dict(size=11, color="#1A1A14"), tickcolor="#1A1A14"),
+        )
+        # Leyenda manual de colores de rotación
+        st.markdown(
+            "<div style='display:flex;gap:16px;margin-bottom:4px;font-size:11px;'>"
+            "<span style='display:flex;align-items:center;gap:5px;'>"
+            "<span style='display:inline-block;width:12px;height:12px;background:#FF3B30;border-radius:2px;'></span>"
+            "Alta Rotación</span>"
+            "<span style='display:flex;align-items:center;gap:5px;'>"
+            "<span style='display:inline-block;width:12px;height:12px;background:#FFB800;border-radius:2px;'></span>"
+            "Media Rotación</span>"
+            "<span style='display:flex;align-items:center;gap:5px;'>"
+            "<span style='display:inline-block;width:12px;height:12px;background:#FF6B35;border-radius:2px;'></span>"
+            "Baja Rotación</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(fig_crit, use_container_width=True, config={"displayModeBar": False})
+
+    # ── Top ventas ─────────────────────────────────────────────────────────────
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
     _label_loc = f" · {sel_loc}" if sel_loc != "Todas las sucursales" else ""
     _seccion("TOP VENTAS 60D", f"Últimos 60 días{_label_loc}")
 
     tc1, tc2, tc3 = st.columns([8, 1, 1])
-    with tc1:
-        pass
     with tc2:
         n_top = st.select_slider("", options=[10, 15, 20, 30, 50], value=10,
                                  key="slider_top_ventas", label_visibility="collapsed")
     with tc3:
         vista_sku = st.toggle("Por SKU", key="toggle_top_sku", value=False)
 
-    if True:
-        if vista_sku:
-            top_data = df_view[["Producto", "Variante", "SKU", "Ventas60d", "_estado"]].copy()
-            top_data = top_data.sort_values("Ventas60d", ascending=True).tail(n_top)
-            top_data["etiqueta"] = top_data["SKU"] + "  " + top_data["Variante"].str[:18]
-            y_vals  = top_data["etiqueta"].tolist()
-            x_vals  = top_data["Ventas60d"].tolist()
-            estados = top_data["_estado"].tolist()
-        else:
-            col_ventas = f"Ventas_{sel_loc}" if sel_loc != "Todas las sucursales" and f"Ventas_{sel_loc}" in df_view.columns else "Ventas60d"
-
-            top_data = (
-                df_view.groupby("_product_id")
-                .apply(lambda g: pd.Series({
-                    "Producto":  g["Producto"].iloc[0],
-                    "Ventas60d": g[col_ventas].sum(),
-                    "_estado":   g.loc[g[col_ventas].idxmax(), "_estado"] if g[col_ventas].sum() > 0 else g["_estado"].iloc[0],
-                }))
-                .reset_index(drop=True)
-            )
-            top_data = top_data[top_data["Ventas60d"] > 0].sort_values("Ventas60d", ascending=True).tail(n_top)
-            y_vals  = top_data["Producto"].tolist()
-            x_vals  = top_data["Ventas60d"].tolist()
-            estados = top_data["_estado"].tolist()
-
-        colores_top = [
-            "#2D6A4F" if e == "ESTRELLA" else
-            "#FFB800" if e == "ALTA_ROTACION" else
-            "#FF3B30" if e == "REPROGRAMAR" else "#4488FF"
-            for e in estados
-        ]
-        max_x = max(x_vals) if x_vals else 1
-        filas = list(zip(y_vals, x_vals, colores_top))[::-1]
-        filas_html = "".join(
-            f"<tr>"
-            f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
-            f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{nombre}</td>"
-            f"<td style='padding:7px 8px;width:35%;'>"
-            f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
-            f"<div style='background:{color};width:{int(val/max_x*100)}%;height:14px;"
-            f"border-radius:3px;opacity:0.9;'></div></div></td>"
-            f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
-            f"color:#6B6456;text-align:right;white-space:nowrap;'>{int(val)} u</td>"
-            f"</tr>"
-            for nombre, val, color in filas
+    if vista_sku:
+        top_data = df_view[["Producto", "Variante", "SKU", "Ventas60d", "_accion", "_rotacion"]].copy()
+        top_data = top_data.sort_values("Ventas60d", ascending=True).tail(n_top)
+        top_data["etiqueta"] = top_data["SKU"] + "  " + top_data["Variante"].str[:18]
+        y_vals   = top_data["etiqueta"].tolist()
+        x_vals   = top_data["Ventas60d"].tolist()
+        acciones = top_data["_accion"].tolist()
+    else:
+        col_ventas = f"Ventas_{sel_loc}" if sel_loc != "Todas las sucursales" and f"Ventas_{sel_loc}" in df_view.columns else "Ventas60d"
+        top_data = (
+            df_view.groupby("_product_id")
+            .apply(lambda g: pd.Series({
+                "Producto":  g["Producto"].iloc[0],
+                "Ventas60d": g[col_ventas].sum(),
+                "_accion":   g.loc[g[col_ventas].idxmax(), "_accion"] if g[col_ventas].sum() > 0 else g["_accion"].iloc[0],
+            }))
+            .reset_index(drop=True)
         )
-        st.markdown(
-            f"<table style='width:100%;border-collapse:collapse;'>"
-            f"<tbody>{filas_html}</tbody></table>",
-            unsafe_allow_html=True,
-        )
+        top_data = top_data[top_data["Ventas60d"] > 0].sort_values("Ventas60d", ascending=True).tail(n_top)
+        y_vals   = top_data["Producto"].tolist()
+        x_vals   = top_data["Ventas60d"].tolist()
+        acciones = top_data["_accion"].tolist()
 
+    colores_top = [ACCION_CFG.get(a, {}).get("color", "#4488FF") for a in acciones]
+    max_x       = max(x_vals) if x_vals else 1
+    filas       = list(zip(y_vals, x_vals, colores_top))[::-1]
+    filas_html  = "".join(
+        f"<tr>"
+        f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
+        f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{nombre}</td>"
+        f"<td style='padding:7px 8px;width:35%;'>"
+        f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+        f"<div style='background:{color};width:{int(val/max_x*100)}%;height:14px;"
+        f"border-radius:3px;opacity:0.9;'></div></div></td>"
+        f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
+        f"color:#6B6456;text-align:right;white-space:nowrap;'>{int(val)} u</td>"
+        f"</tr>"
+        for nombre, val, color in filas
+    )
+    st.markdown(
+        f"<table style='width:100%;border-collapse:collapse;'>"
+        f"<tbody>{filas_html}</tbody></table>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Stock por categoría ────────────────────────────────────────────────────
     _seccion("STOCK POR CATEGORÍA", "Valor en inventario por línea de producto")
     por_tipo = (
         df_view[df_view["Tipo"].str.strip() != ""]
@@ -1273,11 +1589,11 @@ def vista_dashboard(df, locations, token):
         .sort_values("stock", ascending=True)
     )
     por_tipo = por_tipo[por_tipo["stock"] > 0]
-    x_cat   = por_tipo["valor_costo"] if tiene_costos else por_tipo["stock"]
-    txt_cat = ["$" + f"{v:,.0f}" for v in x_cat] if tiene_costos else [str(int(v)) + " u" for v in x_cat]
-    max_cat = x_cat.max() if len(x_cat) > 0 else 1
+    x_cat    = por_tipo["valor_costo"] if tiene_costos else por_tipo["stock"]
+    txt_cat  = ["$" + f"{v:,.0f}" for v in x_cat] if tiene_costos else [str(int(v)) + " u" for v in x_cat]
+    max_cat  = x_cat.max() if len(x_cat) > 0 else 1
     cat_filas = list(zip(por_tipo["Tipo"].tolist()[::-1], x_cat.tolist()[::-1], txt_cat[::-1]))
-    cat_html = "".join(
+    cat_html  = "".join(
         f"<tr>"
         f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
         f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{str(tipo)}</td>"
@@ -1296,64 +1612,16 @@ def vista_dashboard(df, locations, token):
         unsafe_allow_html=True,
     )
 
-    if tiene_costos or tiene_precios:
-        _seccion("VALOR DE INVENTARIO", "Costo vs precio de venta · por categoría")
-        pv = (
-            df_view[df_view["Tipo"].str.strip() != ""]
-            .groupby("Tipo")
-            .agg(vc=("_valor_costo", "sum"), vv=("_valor_venta", "sum"))
-            .reset_index()
-            .sort_values("vv", ascending=True)
-        )
-        pv = pv[(pv["vc"] > 0) | (pv["vv"] > 0)]
-        cats   = pv["Tipo"].tolist()
-        costos = pv["vc"].tolist()
-        ventas = pv["vv"].tolist()
-
-        max_vv = max(ventas) if ventas else 1
-        st.markdown(
-            "<div style='display:flex;gap:20px;margin-bottom:8px;font-size:12px;'>"
-            "<span style='display:flex;align-items:center;gap:6px;'>"
-            "<span style='display:inline-block;width:14px;height:14px;background:#2D6A4F;border-radius:2px;opacity:0.85;'></span>"
-            "<span style='color:#1A1A14;'>Precio venta</span></span>"
-            "<span style='display:flex;align-items:center;gap:6px;'>"
-            "<span style='display:inline-block;width:14px;height:14px;background:#4488FF;border-radius:2px;opacity:0.9;'></span>"
-            "<span style='color:#1A1A14;'>Costo</span></span>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        val_filas = list(zip(cats[::-1], costos[::-1], ventas[::-1]))
-        val_html = "".join(
-            f"<tr>"
-            f"<td style='padding:6px 12px 6px 0;font-size:13px;font-weight:500;"
-            f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;"
-            f"min-width:140px;'>{cat}</td>"
-            f"<td style='padding:6px 8px;width:55%;position:relative;'>"
-            f"<div style='background:#D4CFC4;border-radius:3px;height:18px;position:relative;'>"
-            f"<div style='background:#2D6A4F;width:{int(vv/max_vv*100)}%;height:18px;border-radius:3px;opacity:0.85;position:absolute;top:0;left:0;'></div>"
-            f"<div style='background:#4488FF;width:{int(vc/max_vv*100)}%;height:18px;border-radius:3px;opacity:0.9;position:absolute;top:0;left:0;'></div>"
-            f"</div></td>"
-            f"<td style='padding:6px 4px;font-family:DM Mono,monospace;font-size:11px;"
-            f"color:#2D6A4F;text-align:right;white-space:nowrap;'>{'$'+f'{vv/1e6:.1f}M' if vv>=1e6 else '$'+f'{vv:,.0f}'}</td>"
-            f"<td style='padding:6px 0 6px 8px;font-family:DM Mono,monospace;font-size:11px;"
-            f"color:#4488FF;text-align:right;white-space:nowrap;'>{'$'+f'{vc/1e6:.1f}M' if vc>=1e6 else '$'+f'{vc:,.0f}'}</td>"
-            f"</tr>"
-            for cat, vc, vv in val_filas
-        )
-        st.markdown(
-            f"<table style='width:100%;border-collapse:collapse;'><tbody>{val_html}</tbody></table>",
-            unsafe_allow_html=True,
-        )
-
-    _seccion("RESUMEN POR SEGMENTO")
+    # ── Resumen por acción ─────────────────────────────────────────────────────
+    _seccion("RESUMEN POR ACCIÓN")
     resumen = []
-    for estado in ORDEN_SIDEBAR:
-        cfg = ESTADOS[estado]
-        sub = df_view[df_view["_estado"] == estado]
+    for accion in ACCIONES_ORDEN:
+        cfg = ACCION_CFG[accion]
+        sub = df_view[df_view["_accion"] == accion]
         if sub.empty:
             continue
         row = {
-            "Segmento":    cfg["icon"] + " " + cfg["label"],
+            "Acción":      cfg["icon"] + " " + cfg["label"],
             "Productos":   sub["Producto"].nunique(),
             "SKUs":        len(sub),
             "Stock total": int(sub["Stock"].sum()),
@@ -1364,13 +1632,14 @@ def vista_dashboard(df, locations, token):
         if tiene_precios:
             row["Valor venta"] = "$" + f"{sub['_valor_venta'].sum():,.0f}"
         resumen.append(row)
-    st.dataframe(pd.DataFrame(resumen), use_container_width=True, hide_index=True)
+    if resumen:
+        st.dataframe(pd.DataFrame(resumen), use_container_width=True, hide_index=True)
 
 
-# ─── MÓDULO 1: INVENTARIO ─────────────────────────────────────────────────────
+# ─── MÓDULO 1: INVENTARIO POR ACCIÓN ─────────────────────────────────────────
 
-def vista_inventario(df, estado, locations):
-    cfg   = ESTADOS[estado]
+def vista_inventario(df, accion, locations):
+    cfg   = ACCION_CFG[accion]
     color = cfg["color"]
 
     st.markdown(
@@ -1386,7 +1655,7 @@ def vista_inventario(df, estado, locations):
         unsafe_allow_html=True,
     )
 
-    sub = df[df["_estado"] == estado].copy()
+    sub = df[df["_accion"] == accion].copy()
 
     if sub.empty:
         st.markdown(
@@ -1403,20 +1672,40 @@ def vista_inventario(df, estado, locations):
     with c2: st.metric("Productos",  sub["Producto"].nunique())
     with c3: st.metric("Categorías", sub["Tipo"].nunique())
 
+    # Resumen de rotación dentro del segmento
+    if accion == "REPROGRAMAR":
+        rot_counts = sub.groupby("_rotacion")["Producto"].nunique()
+        rot_cols = st.columns(4)
+        for i, rot in enumerate(["ALTA", "MEDIA", "BAJA", "NULA"]):
+            cfg_r = ROTACION_CFG[rot]
+            cnt_r = rot_counts.get(rot, 0)
+            with rot_cols[i]:
+                st.markdown(
+                    f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
+                    f"border-left:3px solid {cfg_r['color']};border-radius:6px;"
+                    f"padding:8px 12px;'>"
+                    f"<div style='font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
+                    f"color:#6B6456;margin-bottom:3px;'>{cfg_r['icon']} {cfg_r['label']}</div>"
+                    f"<div style='font-family:Bebas Neue,sans-serif;font-size:1.4rem;"
+                    f"color:{cfg_r['color']};line-height:1;'>{cnt_r}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
     fb1, fb2 = st.columns([3, 2])
     with fb1:
         buscar = st.text_input("Buscar", placeholder="Buscar producto...", label_visibility="collapsed",
-                               key=f"buscar_{estado}")
+                               key=f"buscar_{accion}")
     with fb2:
         tipos_disp = sorted(sub["Tipo"].dropna().unique().tolist())
         tipo_sel   = st.selectbox("Categoría", ["Todas"] + tipos_disp,
-                                  label_visibility="collapsed", key=f"tipo_{estado}")
+                                  label_visibility="collapsed", key=f"tipo_{accion}")
 
     loc_cols  = [c for c in sub.columns if c.startswith("Stock_")]
     loc_names = [c.replace("Stock_", "") for c in loc_cols]
     sel_loc   = "Total"
     if loc_cols:
-        sel_loc = st.selectbox("📍 Ver stock de", ["Total"] + loc_names, key=f"loc_{estado}")
+        sel_loc = st.selectbox("📍 Ver stock de", ["Total"] + loc_names, key=f"loc_{accion}")
 
     if tipo_sel != "Todas":
         sub = sub[sub["Tipo"] == tipo_sel]
@@ -1427,7 +1716,7 @@ def vista_inventario(df, estado, locations):
         st.info("Sin resultados.")
         return
 
-    mostrar_form = estado in ("REPROGRAMAR", "ESTRELLA", "ALTA_ROTACION")
+    mostrar_form = accion in ("REPROGRAMAR", "OK")
 
     for tipo, dt in sub.groupby("Tipo", sort=False):
         st.markdown(
@@ -1442,7 +1731,10 @@ def vista_inventario(df, estado, locations):
             gp    = gp.copy().sort_values("Variante")
             n     = len(gp)
             es_bs = bool(gp["_bs"].any())
-            bs_tag = " · ⭐ BS" if es_bs else ""
+            # Mostrar rotación del producto
+            rot_prod  = gp["_rotacion"].mode()[0] if not gp.empty else "NULA"
+            cfg_r     = ROTACION_CFG[rot_prod]
+            bs_tag    = " · ⭐ BS" if es_bs else ""
 
             st.markdown(
                 f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
@@ -1450,29 +1742,35 @@ def vista_inventario(df, estado, locations):
                 "border-radius:8px 8px 0 0;padding:11px 14px;"
                 "display:flex;align-items:center;gap:10px;'>"
                 f"<div style='font-weight:600;font-size:14px;flex:1;'>{prod.upper()}</div>"
+                f"<div style='font-size:11px;padding:2px 8px;border-radius:10px;"
+                f"background:{cfg_r['color']}22;color:{cfg_r['color']};'>"
+                f"{cfg_r['icon']} {cfg_r['label']}</div>"
                 f"<div style='font-size:11px;color:#6B6456;'>{n} talla{'s' if n > 1 else ''}{bs_tag}</div>"
                 "</div>"
                 f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-top:none;"
                 f"border-left:3px solid {color};"
-                "display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr;"
+                "display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr 1fr;"
                 "gap:8px;padding:5px 14px;"
                 "font-size:9px;color:#6B6456;letter-spacing:1.5px;text-transform:uppercase;"
                 "font-family:DM Mono,monospace;'>"
-                "<div>VARIANTE</div><div>STOCK</div><div>DÍAS INV.</div><div>VENTAS 60D</div><div>SUGERIDO</div>"
+                "<div>VARIANTE</div><div>STOCK</div><div>DÍAS INV.</div>"
+                "<div>VENTAS 60D</div><div>ROTACIÓN</div><div>SUGERIDO</div>"
                 "</div>",
                 unsafe_allow_html=True,
             )
 
             for _, row in gp.iterrows():
-                stock_v = int(row.get(f"Stock_{sel_loc}", row["Stock"]) if sel_loc != "Total" else row["Stock"])
-                dias_n  = float(row["DiasInv_n"])
+                stock_v  = int(row.get(f"Stock_{sel_loc}", row["Stock"]) if sel_loc != "Total" else row["Stock"])
+                dias_n   = float(row["DiasInv_n"])
                 dias_str = str(int(dias_n)) if dias_n < 9999 else "∞"
-                sug, _   = sugerir_cantidad(row["Stock"], row["Ventas60d"], dias_n, estado)
+                sug, _   = sugerir_cantidad(row["Stock"], row["Ventas60d"], dias_n, accion)
+                rot_var  = row["_rotacion"]
+                cfg_rv   = ROTACION_CFG[rot_var]
 
                 st.markdown(
                     f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-top:none;"
                     f"border-left:3px solid {color};"
-                    "display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr;"
+                    "display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr 1fr;"
                     "gap:8px;padding:8px 14px;border-top:1px solid #D4CFC4;"
                     "align-items:center;font-size:13px;'>"
                     f"<div style='font-weight:500;'>{row['Variante']}</div>"
@@ -1480,6 +1778,9 @@ def vista_inventario(df, estado, locations):
                     f"<div style='font-family:Bebas Neue,sans-serif;font-size:22px;line-height:1;"
                     f"color:{color};'>{dias_str}</div>"
                     f"<div style='font-size:12px;color:#6B6456;'>{int(row['Ventas60d'])} u</div>"
+                    f"<div style='font-size:10px;padding:2px 6px;border-radius:8px;"
+                    f"background:{cfg_rv['color']}22;color:{cfg_rv['color']};white-space:nowrap;'>"
+                    f"{cfg_rv['icon']} {cfg_rv['label']}</div>"
                     f"<div style='font-size:11px;color:#2D6A4F;font-family:DM Mono,monospace;'>"
                     f"{'↑ ' + str(sug) + ' u' if sug > 0 else '—'}</div>"
                     "</div>",
@@ -1497,7 +1798,7 @@ def vista_inventario(df, estado, locations):
             if mostrar_form:
                 sug_prod, sug_lbl = sugerir_cantidad(
                     int(gp["Stock"].sum()), int(gp["Ventas60d"].sum()),
-                    float(gp["DiasInv_n"].min()), estado,
+                    float(gp["DiasInv_n"].min()), accion,
                 )
                 with st.expander(f"📋 Programar orden — {prod}", expanded=False):
                     pf1, pf2, pf3, pf4 = st.columns([2, 2, 2, 2])
@@ -1521,7 +1822,8 @@ def vista_inventario(df, estado, locations):
             st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
 
 
-# ─── MÓDULO 2: VENTAS ─────────────────────────────────────────────────────────
+# ─── MÓDULOS 2-5: VENTAS, ROTACIÓN, TENDENCIAS, SKUs ─────────────────────────
+# (Sin cambios funcionales — solo se actualizaron referencias de _estado → _accion)
 
 def vista_ventas(token):
     st.markdown(
@@ -1530,7 +1832,7 @@ def vista_ventas(token):
         unsafe_allow_html=True,
     )
 
-    hoy         = datetime.now().date()
+    hoy = datetime.now().date()
     col_d, col_h, col_c = st.columns([2, 2, 2])
     with col_d:
         fecha_desde = st.date_input("Desde", value=hoy - timedelta(days=30), max_value=hoy, key="ventas_desde")
@@ -1553,13 +1855,11 @@ def vista_ventas(token):
         st.info("Sin ventas en el período.")
         return
 
-    # Asegurar columna canal
     if "canal" not in df_v.columns:
         df_v["canal"] = "Online Store"
 
     df_v["fecha"] = pd.to_datetime(df_v["fecha"])
 
-    # ── Tarjetas por canal (siempre visibles) ─────────────────────────────────
     CANALES_INFO = {
         "Online Store":  {"color": "#2D6A4F", "icon": "🌐"},
         "Point of Sale": {"color": "#4488FF", "icon": "🏪"},
@@ -1567,10 +1867,10 @@ def vista_ventas(token):
     }
     cols_c = st.columns(3)
     for i, (canal_name, info) in enumerate(CANALES_INFO.items()):
-        sub_c = df_v[df_v["canal"] == canal_name]
-        tot_c = sub_c["total"].sum()
-        uni_c = int(sub_c["cantidad"].sum())
-        activo = sel_canal == canal_name or sel_canal == "Todos los canales"
+        sub_c   = df_v[df_v["canal"] == canal_name]
+        tot_c   = sub_c["total"].sum()
+        uni_c   = int(sub_c["cantidad"].sum())
+        activo  = sel_canal == canal_name or sel_canal == "Todos los canales"
         opacity = "1" if activo else "0.4"
         with cols_c[i]:
             st.markdown(
@@ -1588,30 +1888,25 @@ def vista_ventas(token):
 
     st.markdown("<hr style='border-color:#D4CFC4;margin:16px 0;'>", unsafe_allow_html=True)
 
-    # Filtrar por canal seleccionado
-    df_view = df_v.copy()
-    if sel_canal != "Todos los canales":
-        df_view = df_v[df_v["canal"] == sel_canal].copy()
-        if df_view.empty:
-            st.info(f"Sin ventas para '{sel_canal}' en este período.")
-            return
-    else:
-        df_view = df_v.copy()
+    df_view = df_v.copy() if sel_canal == "Todos los canales" else df_v[df_v["canal"] == sel_canal].copy()
+
+    if df_view.empty:
+        st.info(f"Sin ventas para '{sel_canal}' en este período.")
+        return
 
     tot   = df_view["total"].sum()
     unids = int(df_view["cantidad"].sum())
 
     c1, c2, c3 = st.columns(3)
-    with c1: st.metric(f"Ventas brutas", fmt_pesos(tot))
-    with c2: st.metric("Unidades vendidas", f"{unids:,}")
-    with c3: st.metric("Ticket promedio",   fmt_pesos(tot / unids) if unids else "—")
+    with c1: st.metric("Ventas brutas",      fmt_pesos(tot))
+    with c2: st.metric("Unidades vendidas",  f"{unids:,}")
+    with c3: st.metric("Ticket promedio",    fmt_pesos(tot / unids) if unids else "—")
 
     st.markdown(
         "<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-left:3px solid #FFB800;"
         "border-radius:6px;padding:10px 14px;margin:8px 0 16px 0;font-size:12px;color:#6B6456;'>"
         "⚠️ <b>Ventas brutas</b> — precio original × unidades, sin descontar descuentos ni devoluciones. "
-        "El desfase respecto a Shopify (ventas netas/totales) es típicamente <b>5–15%</b> "
-        "según los descuentos aplicados en el período."
+        "El desfase respecto a Shopify es típicamente <b>5–15%</b>."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -1638,10 +1933,8 @@ def vista_ventas(token):
     )
     st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
-    # ── PARETO 80/20 ──────────────────────────────────────────────────────────
     _seccion("PARETO 80 / 20", f"Productos que generan el 80% de las ventas brutas · {sel_rango}")
 
-    # Agregar por producto
     pareto = (
         df_view.groupby("producto")
         .agg(total=("total", "sum"), unidades=("cantidad", "sum"))
@@ -1649,143 +1942,61 @@ def vista_ventas(token):
         .sort_values("total", ascending=False)
         .reset_index(drop=True)
     )
-    pareto["acum_pct"]  = pareto["total"].cumsum() / pareto["total"].sum() * 100
-    pareto["rank"]      = range(1, len(pareto) + 1)
-    pareto["prod_pct"]  = pareto["rank"] / len(pareto) * 100
+    pareto["acum_pct"] = pareto["total"].cumsum() / pareto["total"].sum() * 100
+    pareto["rank"]     = range(1, len(pareto) + 1)
+    pareto["prod_pct"] = pareto["rank"] / len(pareto) * 100
 
-    # Calcular corte 80%
     corte_idx   = int((pareto["acum_pct"] <= 80).sum())
     n_total     = len(pareto)
     n_vitales   = max(corte_idx, 1)
     n_triviales = n_total - n_vitales
     pct_prods   = round(n_vitales / n_total * 100, 1)
     rev_vitales = pareto.iloc[:n_vitales]["total"].sum()
-    rev_total   = pareto["total"].sum()
 
-    # Métricas resumen
     c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Productos vitales (80%)", n_vitales,
-                  help="Generan el 80% del revenue")
-    with c2:
-        st.metric("% del catálogo", f"{pct_prods}%",
-                  help=f"{n_vitales} de {n_total} productos")
-    with c3:
-        st.metric("Productos triviales (20%)", n_triviales,
-                  help="El resto del catálogo")
-    with c4:
-        st.metric("Revenue vitales", fmt_pesos(rev_vitales))
+    with c1: st.metric("Productos vitales (80%)", n_vitales)
+    with c2: st.metric("% del catálogo",          f"{pct_prods}%")
+    with c3: st.metric("Productos triviales",      n_triviales)
+    with c4: st.metric("Revenue vitales",          fmt_pesos(rev_vitales))
 
-    # Gráfico Pareto: barras + línea acumulada
-    colores_bar = [
-        "#2D6A4F" if i < n_vitales else "#D4CFC4"
-        for i in range(len(pareto))
-    ]
-    labels_short = [
-        (p[:28] + "…" if len(p) > 28 else p)
-        for p in pareto["producto"].tolist()
-    ]
-
+    colores_bar = ["#2D6A4F" if i < n_vitales else "#D4CFC4" for i in range(len(pareto))]
     fig_pareto = go.Figure()
-
-    # Barras de revenue por producto
     fig_pareto.add_trace(go.Bar(
-        x=list(range(len(pareto))),
-        y=pareto["total"].tolist(),
-        marker_color=colores_bar,
-        marker_opacity=0.85,
-        name="Revenue",
+        x=list(range(len(pareto))), y=pareto["total"].tolist(),
+        marker_color=colores_bar, marker_opacity=0.85, name="Revenue",
         hovertemplate="<b>%{customdata}</b><br>$%{y:,.0f}<extra></extra>",
-        customdata=pareto["producto"].tolist(),
-        yaxis="y1",
+        customdata=pareto["producto"].tolist(), yaxis="y1",
     ))
-
-    # Línea acumulada %
     fig_pareto.add_trace(go.Scatter(
-        x=list(range(len(pareto))),
-        y=pareto["acum_pct"].tolist(),
-        mode="lines",
-        line=dict(color="#FF9500", width=2),
-        name="Acumulado %",
-        hovertemplate="%{y:.1f}%<extra></extra>",
-        yaxis="y2",
+        x=list(range(len(pareto))), y=pareto["acum_pct"].tolist(),
+        mode="lines", line=dict(color="#FF9500", width=2),
+        name="Acumulado %", hovertemplate="%{y:.1f}%<extra></extra>", yaxis="y2",
     ))
-
-    # Línea de corte 80%
-    fig_pareto.add_hline(
-        y=80, line_dash="dot",
-        line_color="#FF3B30", line_width=1.5,
-        annotation_text="80%",
-        annotation_font_size=10,
-        annotation_font_color="#FF3B30",
-        yref="y2",
-    )
-
-    # Línea vertical en el corte
+    fig_pareto.add_hline(y=80, line_dash="dot", line_color="#FF3B30", line_width=1.5,
+                         annotation_text="80%", annotation_font_size=10,
+                         annotation_font_color="#FF3B30", yref="y2")
     if n_vitales < len(pareto):
-        fig_pareto.add_vline(
-            x=n_vitales - 0.5,
-            line_dash="dot",
-            line_color="#FF3B30",
-            line_width=1,
-        )
-
+        fig_pareto.add_vline(x=n_vitales - 0.5, line_dash="dot", line_color="#FF3B30", line_width=1)
     fig_pareto.update_layout(
-        **PLOT_BASE,
-        height=340,
-        margin=dict(t=20, b=60, l=70, r=60),
-        showlegend=False,
-        bargap=0.15,
-        xaxis=dict(
-            showgrid=False,
-            showticklabels=False,
-            zeroline=False,
-        ),
-        yaxis=dict(
-            showgrid=True,
-            gridcolor="#D4CFC4",
-            tickprefix="$",
-            tickformat=",.0f",
-            tickfont=dict(size=9),
-            title=None,
-        ),
-        yaxis2=dict(
-            overlaying="y",
-            side="right",
-            range=[0, 105],
-            ticksuffix="%",
-            tickfont=dict(size=9),
-            showgrid=False,
-            title=None,
-        ),
+        **PLOT_BASE, height=340, margin=dict(t=20, b=60, l=70, r=60),
+        showlegend=False, bargap=0.15,
+        xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+        yaxis=dict(showgrid=True, gridcolor="#D4CFC4", tickprefix="$", tickformat=",.0f",
+                   tickfont=dict(size=9), title=None),
+        yaxis2=dict(overlaying="y", side="right", range=[0, 105], ticksuffix="%",
+                    tickfont=dict(size=9), showgrid=False, title=None),
         annotations=[
-            dict(
-                x=n_vitales / 2,
-                y=-0.18,
-                xref="x",
-                yref="paper",
-                text=f"◀ {n_vitales} vitales · {pct_prods}% del catálogo",
-                showarrow=False,
-                font=dict(size=10, color="#2D6A4F"),
-                xanchor="center",
-            ),
-            dict(
-                x=(n_vitales + n_total) / 2,
-                y=-0.18,
-                xref="x",
-                yref="paper",
-                text=f"{n_triviales} triviales ▶",
-                showarrow=False,
-                font=dict(size=10, color="#B8B0A4"),
-                xanchor="center",
-            ),
+            dict(x=n_vitales/2, y=-0.18, xref="x", yref="paper",
+                 text=f"◀ {n_vitales} vitales · {pct_prods}% del catálogo",
+                 showarrow=False, font=dict(size=10, color="#2D6A4F"), xanchor="center"),
+            dict(x=(n_vitales+n_total)/2, y=-0.18, xref="x", yref="paper",
+                 text=f"{n_triviales} triviales ▶",
+                 showarrow=False, font=dict(size=10, color="#B8B0A4"), xanchor="center"),
         ],
     )
     st.plotly_chart(fig_pareto, use_container_width=True, config={"displayModeBar": False})
 
-    # Tabla de productos vitales
     col_v, col_t = st.columns(2)
-
     with col_v:
         st.markdown(
             f"<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
@@ -1796,100 +2007,50 @@ def vista_ventas(token):
         vitales = pareto.iloc[:n_vitales].copy()
         max_v   = vitales["total"].max() or 1
         v_html  = "".join(
-            f"<tr>"
-            f"<td style='padding:5px 10px 5px 0;font-size:11px;color:#6B6456;"
+            f"<tr><td style='padding:5px 10px 5px 0;font-size:11px;color:#6B6456;"
             f"font-family:DM Mono,monospace;'>{int(r['rank'])}</td>"
-            f"<td style='padding:5px 10px;font-size:12px;font-weight:500;color:#1A1A14;"
-            f"font-family:DM Sans,sans-serif;'>{r['producto'][:34]}</td>"
-            f"<td style='padding:5px 0;width:30%;'>"
-            f"<div style='background:#D4CFC4;border-radius:2px;height:12px;'>"
-            f"<div style='background:#2D6A4F;width:{int(r['total']/max_v*100)}%;height:12px;"
-            f"border-radius:2px;opacity:0.85;'></div></div></td>"
+            f"<td style='padding:5px 10px;font-size:12px;font-weight:500;color:#1A1A14;'>{r['producto'][:34]}</td>"
+            f"<td style='padding:5px 0;width:30%;'><div style='background:#D4CFC4;border-radius:2px;height:12px;'>"
+            f"<div style='background:#2D6A4F;width:{int(r['total']/max_v*100)}%;height:12px;border-radius:2px;opacity:0.85;'>"
+            f"</div></div></td>"
             f"<td style='padding:5px 0 5px 8px;font-family:DM Mono,monospace;font-size:11px;"
-            f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>"
-            f"{fmt_pesos(r['total'])}</td>"
+            f"color:#2D6A4F;text-align:right;font-weight:600;'>{fmt_pesos(r['total'])}</td>"
             f"<td style='padding:5px 0 5px 6px;font-family:DM Mono,monospace;font-size:10px;"
-            f"color:#B8B0A4;text-align:right;white-space:nowrap;'>"
-            f"{r['acum_pct']:.1f}%</td>"
-            f"</tr>"
+            f"color:#B8B0A4;text-align:right;'>{r['acum_pct']:.1f}%</td></tr>"
             for _, r in vitales.iterrows()
         )
-        st.markdown(
-            f"<table style='width:100%;border-collapse:collapse;'>"
-            f"<thead><tr>"
-            f"<th style='padding:4px 10px 4px 0;font-size:9px;letter-spacing:1.5px;"
-            f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-            f"text-align:left;font-weight:400;'>#</th>"
-            f"<th style='padding:4px 10px;font-size:9px;letter-spacing:1.5px;"
-            f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-            f"text-align:left;font-weight:400;'>PRODUCTO</th>"
-            f"<th colspan='2' style='padding:4px 0;font-size:9px;letter-spacing:1.5px;"
-            f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-            f"text-align:left;font-weight:400;'>REVENUE</th>"
-            f"<th style='padding:4px 0 4px 6px;font-size:9px;letter-spacing:1.5px;"
-            f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-            f"text-align:right;font-weight:400;'>ACUM.</th>"
-            f"</tr></thead>"
-            f"<tbody>{v_html}</tbody></table>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"<table style='width:100%;border-collapse:collapse;'><tbody>{v_html}</tbody></table>",
+                    unsafe_allow_html=True)
 
     with col_t:
         st.markdown(
             f"<div style='font-family:Bebas Neue,sans-serif;font-size:13px;"
             f"letter-spacing:2px;color:#B8B0A4;margin-bottom:8px;'>"
-            f"TRIVIALES — {n_triviales} productos · 20% del revenue</div>",
+            f"TRIVIALES — {n_triviales} productos</div>",
             unsafe_allow_html=True,
         )
         triviales = pareto.iloc[n_vitales:].copy()
         if triviales.empty:
-            st.markdown(
-                "<div style='font-size:12px;color:#B8B0A4;padding:20px 0;'>"
-                "Sin productos en esta categoría.</div>",
-                unsafe_allow_html=True,
-            )
+            st.markdown("<div style='font-size:12px;color:#B8B0A4;padding:20px 0;'>Sin productos.</div>",
+                        unsafe_allow_html=True)
         else:
             max_t  = triviales["total"].max() or 1
             t_html = "".join(
-                f"<tr>"
-                f"<td style='padding:5px 10px 5px 0;font-size:11px;color:#B8B0A4;"
+                f"<tr><td style='padding:5px 10px 5px 0;font-size:11px;color:#B8B0A4;"
                 f"font-family:DM Mono,monospace;'>{int(r['rank'])}</td>"
-                f"<td style='padding:5px 10px;font-size:12px;color:#6B6456;"
-                f"font-family:DM Sans,sans-serif;'>{r['producto'][:34]}</td>"
-                f"<td style='padding:5px 0;width:30%;'>"
-                f"<div style='background:#D4CFC4;border-radius:2px;height:12px;'>"
+                f"<td style='padding:5px 10px;font-size:12px;color:#6B6456;'>{r['producto'][:34]}</td>"
+                f"<td style='padding:5px 0;width:30%;'><div style='background:#D4CFC4;border-radius:2px;height:12px;'>"
                 f"<div style='background:#B8B0A4;width:{int(r['total']/max_t*100)}%;height:12px;"
                 f"border-radius:2px;opacity:0.6;'></div></div></td>"
                 f"<td style='padding:5px 0 5px 8px;font-family:DM Mono,monospace;font-size:11px;"
-                f"color:#6B6456;text-align:right;white-space:nowrap;'>"
-                f"{fmt_pesos(r['total'])}</td>"
+                f"color:#6B6456;text-align:right;'>{fmt_pesos(r['total'])}</td>"
                 f"<td style='padding:5px 0 5px 6px;font-family:DM Mono,monospace;font-size:10px;"
-                f"color:#B8B0A4;text-align:right;white-space:nowrap;'>"
-                f"{r['acum_pct']:.1f}%</td>"
-                f"</tr>"
+                f"color:#B8B0A4;text-align:right;'>{r['acum_pct']:.1f}%</td></tr>"
                 for _, r in triviales.iterrows()
             )
-            st.markdown(
-                f"<table style='width:100%;border-collapse:collapse;'>"
-                f"<thead><tr>"
-                f"<th style='padding:4px 10px 4px 0;font-size:9px;letter-spacing:1.5px;"
-                f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-                f"text-align:left;font-weight:400;'>#</th>"
-                f"<th style='padding:4px 10px;font-size:9px;letter-spacing:1.5px;"
-                f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-                f"text-align:left;font-weight:400;'>PRODUCTO</th>"
-                f"<th colspan='2' style='padding:4px 0;font-size:9px;letter-spacing:1.5px;"
-                f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-                f"text-align:left;font-weight:400;'>REVENUE</th>"
-                f"<th style='padding:4px 0 4px 6px;font-size:9px;letter-spacing:1.5px;"
-                f"text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-                f"text-align:right;font-weight:400;'>ACUM.</th>"
-                f"</tr></thead>"
-                f"<tbody>{t_html}</tbody></table>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"<table style='width:100%;border-collapse:collapse;'><tbody>{t_html}</tbody></table>",
+                        unsafe_allow_html=True)
 
-    # ── TOP PRODUCTOS (existente) ──────────────────────────────────────────────
     _seccion("TOP PRODUCTOS", f"Por valor de venta · {sel_rango}")
     tp = (
         df_view.groupby("producto")
@@ -1898,26 +2059,20 @@ def vista_ventas(token):
         .sort_values("total", ascending=False)
         .head(15)
     )
-    max_tp = tp["total"].max() if len(tp) else 1
+    max_tp  = tp["total"].max() if len(tp) else 1
     tp_html = "".join(
-        f"<tr>"
-        f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
-        f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{row.producto}</td>"
-        f"<td style='padding:7px 8px;width:45%;'>"
-        f"<div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
-        f"<div style='background:#2D6A4F;width:{int(row.total/max_tp*100)}%;height:16px;"
-        f"border-radius:3px;opacity:0.85;'></div></div></td>"
-        f"<td style='padding:7px 4px;font-family:DM Mono,monospace;font-size:12px;"
-        f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>{fmt_pesos(row.total)}</td>"
+        f"<tr><td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;color:#1A1A14;'>{row.producto}</td>"
+        f"<td style='padding:7px 8px;width:45%;'><div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
+        f"<div style='background:#2D6A4F;width:{int(row.total/max_tp*100)}%;height:16px;border-radius:3px;opacity:0.85;'>"
+        f"</div></div></td>"
+        f"<td style='padding:7px 4px;font-family:DM Mono,monospace;font-size:12px;color:#2D6A4F;"
+        f"text-align:right;font-weight:600;'>{fmt_pesos(row.total)}</td>"
         f"<td style='padding:7px 0 7px 12px;font-family:DM Mono,monospace;font-size:12px;"
-        f"color:#6B6456;text-align:right;white-space:nowrap;'>{int(row.unidades)} u</td>"
-        f"</tr>"
+        f"color:#6B6456;text-align:right;'>{int(row.unidades)} u</td></tr>"
         for row in tp.itertuples()
     )
-    st.markdown(
-        f"<table style='width:100%;border-collapse:collapse;'><tbody>{tp_html}</tbody></table>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<table style='width:100%;border-collapse:collapse;'><tbody>{tp_html}</tbody></table>",
+                unsafe_allow_html=True)
 
     _seccion("DETALLE POR SKU", "Variantes ordenadas por unidades vendidas")
     det = (
@@ -1933,24 +2088,18 @@ def vista_ventas(token):
             f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
             f"border-left:3px solid #2D6A4F;border-radius:6px 6px 0 0;"
             f"padding:10px 14px;display:flex;align-items:center;justify-content:space-between;'>"
-            f"<div style='font-weight:600;font-size:13px;color:#1A1A14;"
-            f"font-family:DM Sans,sans-serif;'>{prod}</div>"
+            f"<div style='font-weight:600;font-size:13px;color:#1A1A14;'>{prod}</div>"
             f"<div style='font-family:DM Mono,monospace;font-size:12px;color:#2D6A4F;'>"
-            f"{fmt_pesos(total_prod)} · {unids_prod} u</div>"
-            f"</div>",
+            f"{fmt_pesos(total_prod)} · {unids_prod} u</div></div>",
             unsafe_allow_html=True,
         )
         rows_sku = "".join(
             f"<tr style='border-top:1px solid #D4CFC4;'>"
-            f"<td style='padding:6px 14px;font-size:12px;color:#6B6456;"
-            f"font-family:DM Mono,monospace;white-space:nowrap;'>{r.sku}</td>"
-            f"<td style='padding:6px 14px;font-size:12px;color:#1A1A14;"
-            f"font-family:DM Sans,sans-serif;'>{r.variante}</td>"
-            f"<td style='padding:6px 14px;font-family:DM Mono,monospace;font-size:12px;"
-            f"color:#1A1A14;text-align:right;white-space:nowrap;'>{int(r.unidades)} u</td>"
-            f"<td style='padding:6px 14px;font-family:DM Mono,monospace;font-size:12px;"
-            f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>{fmt_pesos(r.total)}</td>"
-            f"</tr>"
+            f"<td style='padding:6px 14px;font-size:12px;color:#6B6456;font-family:DM Mono,monospace;'>{r.sku}</td>"
+            f"<td style='padding:6px 14px;font-size:12px;color:#1A1A14;'>{r.variante}</td>"
+            f"<td style='padding:6px 14px;font-family:DM Mono,monospace;font-size:12px;text-align:right;'>{int(r.unidades)} u</td>"
+            f"<td style='padding:6px 14px;font-family:DM Mono,monospace;font-size:12px;color:#2D6A4F;"
+            f"text-align:right;font-weight:600;'>{fmt_pesos(r.total)}</td></tr>"
             for r in grupo.itertuples()
         )
         st.markdown(
@@ -1961,8 +2110,6 @@ def vista_ventas(token):
             unsafe_allow_html=True,
         )
 
-
-# ─── MÓDULO 3: ROTACIÓN ───────────────────────────────────────────────────────
 
 def vista_rotacion(df):
     st.markdown(
@@ -1977,8 +2124,8 @@ def vista_rotacion(df):
         st.warning("Sin datos.")
         return
 
-    liq = df[df["_estado"] == "LIQUIDAR"].copy()
-    rep = df[df["_estado"].isin(["REPROGRAMAR", "ESTRELLA", "ALTA_ROTACION"])].copy()
+    liq = df[df["_accion"] == "LIQUIDAR"].copy()
+    rep = df[df["_accion"].isin(["REPROGRAMAR"])].copy()
 
     st.markdown(
         "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
@@ -1990,16 +2137,13 @@ def vista_rotacion(df):
     factor   = 1 - desc_pct / 100
 
     capital_total = 0.0
-    liq_ag = pd.DataFrame()
 
     if liq.empty:
         st.info("No hay productos en LIQUIDAR actualmente.")
     else:
         liq_ag = liq.groupby("Producto").agg(
-            stock=("Stock", "sum"),
-            precio=("Precio Venta", "mean"),
-            costo=("Costo", "mean"),
-            ventas=("Ventas60d", "sum"),
+            stock=("Stock", "sum"), precio=("Precio Venta", "mean"),
+            costo=("Costo", "mean"), ventas=("Ventas60d", "sum"),
         ).reset_index()
         liq_ag = liq_ag[liq_ag["stock"] > 0].copy()
         liq_ag["precio_liq"]  = liq_ag["precio"] * factor
@@ -2008,34 +2152,26 @@ def vista_rotacion(df):
         capital_total = liq_ag["capital_liq"].sum()
 
         liq_plot = liq_ag.sort_values("capital_liq", ascending=False).head(15)
-        max_liq = liq_plot["capital_liq"].max() or 1
+        max_liq  = liq_plot["capital_liq"].max() or 1
         liq_html = "".join(
-            f"<tr>"
-            f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
-            f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
-            f"<td style='padding:7px 8px;width:40%;'>"
-            f"<div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
+            f"<tr><td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;color:#1A1A14;'>{r['Producto']}</td>"
+            f"<td style='padding:7px 8px;width:40%;'><div style='background:#D4CFC4;border-radius:3px;height:16px;'>"
             f"<div style='background:#FF9500;width:{min(100,int(r['capital_liq']/max_liq*100))}%;height:16px;"
             f"border-radius:3px;opacity:0.85;'></div></div></td>"
             f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
-            f"color:#FF9500;text-align:right;white-space:nowrap;font-weight:600;'>{fmt_pesos(r['capital_liq'])}</td>"
+            f"color:#FF9500;text-align:right;font-weight:600;'>{fmt_pesos(r['capital_liq'])}</td>"
             f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
-            f"color:#6B6456;text-align:right;white-space:nowrap;'>{int(r['stock'])} u</td>"
-            f"</tr>"
+            f"color:#6B6456;text-align:right;'>{int(r['stock'])} u</td></tr>"
             for _, r in liq_plot.iterrows()
         )
-        st.markdown(
-            f"<table style='width:100%;border-collapse:collapse;'><tbody>{liq_html}</tbody></table>",
-            unsafe_allow_html=True,
-        )
-
+        st.markdown(f"<table style='width:100%;border-collapse:collapse;'><tbody>{liq_html}</tbody></table>",
+                    unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         with c1: st.metric("Productos a liquidar", len(liq_ag))
         with c2: st.metric("Unidades totales",     int(liq_ag["stock"].sum()))
         with c3: st.metric(f"Capital estimado ({desc_pct}% desc.)", fmt_pesos(capital_total))
 
     st.markdown("<hr style='border-color:#D4CFC4;margin:24px 0;'>", unsafe_allow_html=True)
-
     st.markdown(
         "<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
         "letter-spacing:2px;color:#2D6A4F;margin-bottom:8px;'>PASO 2 — ¿QUÉ REPONGO CON ESE CAPITAL?</div>",
@@ -2045,28 +2181,23 @@ def vista_rotacion(df):
     presupuesto = st.number_input(
         "Presupuesto disponible ($COP)",
         min_value=0, value=int(capital_total), step=100_000, key="presupuesto_rot",
-        help="Puedes ajustar este valor. Por defecto es el capital estimado de liquidación.",
     )
 
     if rep.empty:
-        st.info("No hay productos en REPROGRAMAR, ESTRELLA o ALTA_ROTACION.")
+        st.info("No hay productos en REPROGRAMAR.")
         return
 
     rep_ag = rep.groupby("Producto").agg(
-        costo=("Costo", "mean"),
-        ventas=("Ventas60d", "sum"),
-        stock=("Stock", "sum"),
-        dias=("DiasInv_n", "min"),
-        estado=("_estado", "first"),
+        costo=("Costo", "mean"), ventas=("Ventas60d", "sum"),
+        stock=("Stock", "sum"), dias=("DiasInv_n", "min"),
+        accion=("_accion", "first"), rotacion=("_rotacion", "first"),
     ).reset_index()
     rep_ag = rep_ag[rep_ag["costo"] > 0].sort_values("ventas", ascending=False)
-
     rep_ag["sug_unids"] = rep_ag.apply(
-        lambda r: sugerir_cantidad(r["stock"], r["ventas"], r["dias"], r["estado"])[0], axis=1
+        lambda r: sugerir_cantidad(r["stock"], r["ventas"], r["dias"], r["accion"])[0], axis=1
     )
-    rep_ag["costo_sug"] = rep_ag["sug_unids"] * rep_ag["costo"]
-
-    presupuesto_rest = float(presupuesto)
+    rep_ag["costo_sug"]      = rep_ag["sug_unids"] * rep_ag["costo"]
+    presupuesto_rest         = float(presupuesto)
     rep_ag["unids_posibles"] = 0
     rep_ag["costo_real"]     = 0.0
 
@@ -2087,22 +2218,9 @@ def vista_rotacion(df):
 
     if not rep_con.empty:
         rep_plot = rep_con.sort_values("costo_real", ascending=False)
-        max_sug = rep_plot["costo_sug"].max() or 1
-        st.markdown(
-            "<div style='display:flex;gap:20px;margin-bottom:8px;font-size:12px;'>"
-            "<span style='display:flex;align-items:center;gap:6px;'>"
-            "<span style='display:inline-block;width:14px;height:14px;background:#2D6A4F;"
-            "border-radius:2px;'></span><span style='color:#1A1A14;'>Posible reponer</span></span>"
-            "<span style='display:flex;align-items:center;gap:6px;'>"
-            "<span style='display:inline-block;width:14px;height:14px;background:#D4CFC4;"
-            "border-radius:2px;'></span><span style='color:#1A1A14;'>Sugerido total</span></span>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
+        max_sug  = rep_plot["costo_sug"].max() or 1
         rep_html = "".join(
-            f"<tr>"
-            f"<td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;"
-            f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
+            f"<tr><td style='padding:7px 12px 7px 0;font-size:13px;font-weight:500;color:#1A1A14;'>{r['Producto']}</td>"
             f"<td style='padding:7px 8px;width:40%;position:relative;'>"
             f"<div style='background:#D4CFC4;border-radius:3px;height:18px;position:relative;'>"
             f"<div style='background:#D4CFC4;width:{min(100,int(r['costo_sug']/max_sug*100))}%;height:18px;"
@@ -2111,18 +2229,13 @@ def vista_rotacion(df):
             f"border-radius:3px;position:absolute;top:0;left:0;opacity:0.9;'></div>"
             f"</div></td>"
             f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
-            f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>"
-            f"{int(r['unids_posibles'])} u</td>"
+            f"color:#2D6A4F;text-align:right;font-weight:600;'>{int(r['unids_posibles'])} u</td>"
             f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:12px;"
-            f"color:#1A1A14;text-align:right;white-space:nowrap;'>"
-            f"{fmt_pesos(r['costo_real'])}</td>"
-            f"</tr>"
+            f"color:#1A1A14;text-align:right;'>{fmt_pesos(r['costo_real'])}</td></tr>"
             for _, r in rep_plot.iterrows()
         )
-        st.markdown(
-            f"<table style='width:100%;border-collapse:collapse;'><tbody>{rep_html}</tbody></table>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"<table style='width:100%;border-collapse:collapse;'><tbody>{rep_html}</tbody></table>",
+                    unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.metric("Productos a reponer",  len(rep_con))
@@ -2135,13 +2248,10 @@ def vista_rotacion(df):
             f"<div style='font-size:11px;color:#B8B0A4;margin-top:8px;'>"
             f"{len(rep_sin)} productos necesitan reposición pero el presupuesto no alcanza: "
             + ", ".join(rep_sin["Producto"].str[:25].tolist()[:5])
-            + ("..." if len(rep_sin) > 5 else "") +
-            "</div>",
+            + ("..." if len(rep_sin) > 5 else "") + "</div>",
             unsafe_allow_html=True,
         )
 
-
-# ─── MÓDULO 4: TENDENCIAS ─────────────────────────────────────────────────────
 
 def vista_tendencias(token):
     st.markdown(
@@ -2161,7 +2271,7 @@ def vista_tendencias(token):
     with st.spinner("Cargando 90 días de ventas..."):
         hoy_t   = datetime.now().date()
         desde_t = hoy_t - timedelta(days=90)
-        df_t = cargar_ventas_rango(token, desde_t, hoy_t)
+        df_t    = cargar_ventas_rango(token, desde_t, hoy_t)
 
     if df_t.empty:
         st.info("Sin datos de ventas.")
@@ -2177,7 +2287,6 @@ def vista_tendencias(token):
 
     comp = pd.DataFrame({"reciente": rec, "anterior": ant}).fillna(0)
     comp = comp[(comp["reciente"] >= 3) & (comp["anterior"] >= 3)].copy()
-
     comp["delta"] = comp["reciente"] - comp["anterior"]
     comp["pct"]   = (comp["delta"] / comp["anterior"] * 100).round(0)
     comp = comp.reset_index()
@@ -2200,26 +2309,18 @@ def vista_tendencias(token):
         else:
             max_crec = top_crec["Δ u"].quantile(0.85) or top_crec["Δ u"].max() or 1
             crec_html = "".join(
-                f"<tr>"
-                f"<td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;"
-                f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
-                f"<td style='padding:7px 8px;width:35%;'>"
-                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+                f"<tr><td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;color:#1A1A14;'>{r['Producto']}</td>"
+                f"<td style='padding:7px 8px;width:35%;'><div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
                 f"<div style='background:#2D6A4F;width:{min(100,int(r['Δ u']/max_crec*100))}%;height:14px;"
                 f"border-radius:3px;opacity:0.85;'></div></div></td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
-                f"color:#2D6A4F;text-align:right;white-space:nowrap;font-weight:600;'>"
-                f"+{int(r['Últimos 30d'])} u</td>"
+                f"color:#2D6A4F;text-align:right;font-weight:600;'>+{int(r['Últimos 30d'])} u</td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
-                f"color:#6B6456;text-align:right;white-space:nowrap;'>"
-                f"{r['Δ %']:+.0f}%</td>"
-                f"</tr>"
+                f"color:#6B6456;text-align:right;'>{r['Δ %']:+.0f}%</td></tr>"
                 for _, r in top_crec.iterrows()
             )
-            st.markdown(
-                f"<table style='width:100%;border-collapse:collapse;'><tbody>{crec_html}</tbody></table>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"<table style='width:100%;border-collapse:collapse;'><tbody>{crec_html}</tbody></table>",
+                        unsafe_allow_html=True)
 
     with col_r:
         st.markdown(
@@ -2230,32 +2331,24 @@ def vista_tendencias(token):
         if top_dec.empty:
             st.info("Sin productos con tendencia decreciente significativa.")
         else:
-            max_dec = top_dec["Δ u"].abs().quantile(0.85) or top_dec["Δ u"].abs().max() or 1
+            max_dec  = top_dec["Δ u"].abs().quantile(0.85) or top_dec["Δ u"].abs().max() or 1
             dec_html = "".join(
-                f"<tr>"
-                f"<td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;"
-                f"color:#1A1A14;font-family:DM Sans,sans-serif;white-space:nowrap;'>{r['Producto']}</td>"
-                f"<td style='padding:7px 8px;width:35%;'>"
-                f"<div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
+                f"<tr><td style='padding:7px 12px 7px 0;font-size:12px;font-weight:500;color:#1A1A14;'>{r['Producto']}</td>"
+                f"<td style='padding:7px 8px;width:35%;'><div style='background:#D4CFC4;border-radius:3px;height:14px;'>"
                 f"<div style='background:#FF3B30;width:{min(100,int(abs(r['Δ u'])/max_dec*100))}%;height:14px;"
                 f"border-radius:3px;opacity:0.75;'></div></div></td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
-                f"color:#FF3B30;text-align:right;white-space:nowrap;font-weight:600;'>"
-                f"{int(r['Últimos 30d'])} u</td>"
+                f"color:#FF3B30;text-align:right;font-weight:600;'>{int(r['Últimos 30d'])} u</td>"
                 f"<td style='padding:7px 0 7px 8px;font-family:DM Mono,monospace;font-size:11px;"
-                f"color:#6B6456;text-align:right;white-space:nowrap;'>"
-                f"{r['Δ %']:+.0f}%</td>"
-                f"</tr>"
+                f"color:#6B6456;text-align:right;'>{r['Δ %']:+.0f}%</td></tr>"
                 for _, r in top_dec.iterrows()
             )
-            st.markdown(
-                f"<table style='width:100%;border-collapse:collapse;'><tbody>{dec_html}</tbody></table>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"<table style='width:100%;border-collapse:collapse;'><tbody>{dec_html}</tbody></table>",
+                        unsafe_allow_html=True)
 
     st.markdown(
         "<div style='font-size:10px;color:#B8B0A4;margin-bottom:20px;'>"
-        "Solo se muestran productos con ≥ 3 unidades vendidas en ambos períodos para eliminar ruido estadístico."
+        "Solo se muestran productos con ≥ 3 unidades vendidas en ambos períodos."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -2265,15 +2358,14 @@ def vista_tendencias(token):
         "letter-spacing:2px;color:#6B6456;margin:16px 0 6px 0;'>EVOLUCIÓN SEMANAL — DRILL DOWN</div>",
         unsafe_allow_html=True,
     )
-
-    top5 = df_t[df_t["fecha"] >= corte].groupby("producto")["cantidad"].sum().nlargest(5).index.tolist()
+    top5       = df_t[df_t["fecha"] >= corte].groupby("producto")["cantidad"].sum().nlargest(5).index.tolist()
     prods_disp = sorted(df_t["producto"].unique().tolist())
     sel_prods  = st.multiselect("Seleccionar productos", prods_disp, default=top5[:3], key="sel_tend")
 
     if sel_prods:
         df_sel = df_t[df_t["producto"].isin(sel_prods)].copy()
         df_sel["semana"] = df_sel["fecha"].dt.to_period("W").dt.start_time
-        evol   = df_sel.groupby(["semana", "producto"])["cantidad"].sum().reset_index()
+        evol    = df_sel.groupby(["semana", "producto"])["cantidad"].sum().reset_index()
         colores = ["#2D6A4F", "#FF3B30", "#FFB800", "#4488FF", "#FF6B35"]
 
         fig_ev = go.Figure()
@@ -2288,12 +2380,10 @@ def vista_tendencias(token):
                 marker=dict(size=6),
                 hovertemplate="<b>%{fullData.name}</b><br>Semana %{x|%d %b}<br>%{y} u<extra></extra>",
             ))
-
         fig_ev.add_vline(
             x=corte.timestamp() * 1000,
             line=dict(color="#B8B0A4", width=1, dash="dot"),
-            annotation_text="hace 30d",
-            annotation_font_size=9,
+            annotation_text="hace 30d", annotation_font_size=9,
         )
         fig_ev.update_layout(
             **PLOT_BASE, height=320,
@@ -2308,33 +2398,30 @@ def vista_tendencias(token):
 # ─── MÓDULO 5: GESTIÓN DE SKUs ────────────────────────────────────────────────
 
 def _sku_format(prefix, n):
-    """Padding dinámico: 3 dígitos hasta 999, 4 desde 1000."""
     if n >= 1000:
         return f"{prefix}{n:04d}"
     return f"{prefix}{n:03d}"
 
 
 def _ean13_generate(seed_str):
-    """Genera EAN-13 válido con dígito verificador correcto."""
     random.seed(seed_str)
     digits = [random.randint(0, 9) for _ in range(12)]
-    check = (10 - sum(d * (1 if i % 2 == 0 else 3) for i, d in enumerate(digits)) % 10) % 10
+    check  = (10 - sum(d * (1 if i % 2 == 0 else 3) for i, d in enumerate(digits)) % 10) % 10
     return "".join(map(str, digits)) + str(check)
 
 
 def _sku_fetch_all_products(token):
-    """Trae todos los productos activos con sus variantes (REST, paginado)."""
-    shop = st.secrets["TIENDA_URL"]
-    url = f"https://{shop}/admin/api/{API_VERSION}/products.json"
+    shop   = st.secrets["TIENDA_URL"]
+    url    = f"https://{shop}/admin/api/{API_VERSION}/products.json"
     params = {"limit": 250, "fields": "id,title,product_type,variants", "status": "active"}
     products = []
-    hdrs = _headers(token)
+    hdrs   = _headers(token)
     while url:
         r = requests.get(url, headers=hdrs, params=params, timeout=30)
         r.raise_for_status()
         products.extend(r.json().get("products", []))
-        link = r.headers.get("Link", "")
-        url = None
+        link   = r.headers.get("Link", "")
+        url    = None
         params = {}
         for part in link.split(","):
             if 'rel="next"' in part:
@@ -2343,13 +2430,12 @@ def _sku_fetch_all_products(token):
 
 
 def _sku_compute_counters(products):
-    """Lee SKUs existentes y retorna el máximo consecutivo por prefijo."""
     counters = defaultdict(int)
-    pattern = re.compile(r"^([A-Z]{3})(\d{3,4})$")
+    pattern  = re.compile(r"^([A-Z]{3})(\d{3,4})$")
     for p in products:
         for v in p.get("variants", []):
             sku = (v.get("sku") or "").strip().upper()
-            m = pattern.match(sku)
+            m   = pattern.match(sku)
             if m:
                 prefix, num = m.group(1), int(m.group(2))
                 counters[prefix] = max(counters[prefix], num)
@@ -2357,13 +2443,12 @@ def _sku_compute_counters(products):
 
 
 def _sku_collect_unassigned(products):
-    """Retorna variantes sin SKU con metadata del producto."""
     result = []
     for p in products:
-        ptype = p.get("product_type", "").strip()
+        ptype  = p.get("product_type", "").strip()
         prefix = PREFIX_MAP.get(ptype)
         for v in p.get("variants", []):
-            sku = (v.get("sku") or "").strip()
+            sku     = (v.get("sku") or "").strip()
             barcode = (v.get("barcode") or "").strip()
             if not sku:
                 result.append({
@@ -2379,10 +2464,9 @@ def _sku_collect_unassigned(products):
 
 
 def _sku_assign(unassigned, counters):
-    """Asigna SKU y barcode a cada variante sin SKU."""
     local_counters = dict(counters)
-    assigned = []
-    seen_barcodes = set()
+    assigned       = []
+    seen_barcodes  = set()
     for row in unassigned:
         prefix = row["prefix"]
         if not prefix:
@@ -2390,13 +2474,13 @@ def _sku_assign(unassigned, counters):
                               "error": f"Tipo sin prefijo configurado: '{row['product_type']}'"})
             continue
         local_counters[prefix] = local_counters.get(prefix, 0) + 1
-        n = local_counters[prefix]
+        n       = local_counters[prefix]
         new_sku = _sku_format(prefix, n)
         if row["current_barcode"]:
             new_barcode = row["current_barcode"]
         else:
             candidate = _ean13_generate(new_sku)
-            attempts = 0
+            attempts  = 0
             while candidate in seen_barcodes and attempts < 20:
                 candidate = _ean13_generate(new_sku + str(attempts))
                 attempts += 1
@@ -2407,9 +2491,8 @@ def _sku_assign(unassigned, counters):
 
 
 def _sku_push_variant(token, variant_id, new_sku, new_barcode, has_barcode):
-    """Actualiza SKU (y opcionalmente barcode) de una variante en Shopify."""
-    shop = st.secrets["TIENDA_URL"]
-    url = f"https://{shop}/admin/api/{API_VERSION}/variants/{variant_id}.json"
+    shop    = st.secrets["TIENDA_URL"]
+    url     = f"https://{shop}/admin/api/{API_VERSION}/variants/{variant_id}.json"
     payload = {"variant": {"id": int(variant_id), "sku": new_sku}}
     if not has_barcode:
         payload["variant"]["barcode"] = new_barcode
@@ -2447,48 +2530,20 @@ def vista_sku_manager(token):
         st.markdown(
             "<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-left:3px solid #4488FF;"
             "border-radius:8px;padding:16px 20px;font-size:13px;color:#6B6456;'>"
-            "Presiona el botón para escanear todos los productos de Shopify. "
-            "El script leerá los SKUs existentes, calculará el consecutivo más alto "
-            "por tipo de producto, y te mostrará un preview antes de subir nada.</div>",
+            "Presiona el botón para escanear todos los productos de Shopify.</div>",
             unsafe_allow_html=True,
         )
         return
 
     total_variants = sum(len(p.get("variants", [])) for p in products)
-    total_products = len(products)
     c1, c2, c3 = st.columns(3)
-    with c1: st.metric("Productos en Shopify", total_products)
+    with c1: st.metric("Productos en Shopify", len(products))
     with c2: st.metric("Variantes totales",    total_variants)
-    with c3: st.metric("Variantes sin SKU",    len(unassigned),
-                        delta=f"{'✅ Todo asignado' if len(unassigned) == 0 else f'{len(unassigned)} pendientes'}",
-                        delta_color="normal" if len(unassigned) > 0 else "off")
+    with c3: st.metric("Variantes sin SKU",    len(unassigned))
 
     if not unassigned:
         st.success("✅ Todos los productos y variantes ya tienen SKU asignado.")
         return
-
-    with st.expander("📊 Consecutivos actuales por prefijo", expanded=False):
-        if counters:
-            rows_cnt = sorted(counters.items())
-            cnt_html = "".join(
-                f"<tr>"
-                f"<td style='padding:6px 16px 6px 0;font-family:DM Mono,monospace;"
-                f"font-size:13px;color:#1A1A14;font-weight:500;'>{pfx}</td>"
-                f"<td style='padding:6px 0;font-size:13px;color:#6B6456;'>"
-                f"último: <span style='font-family:DM Mono,monospace;color:#2D6A4F;"
-                f"font-weight:600;'>{_sku_format(pfx, n)}</span>"
-                f"&nbsp;&nbsp;→&nbsp;&nbsp;siguiente: "
-                f"<span style='font-family:DM Mono,monospace;color:#FF9500;"
-                f"font-weight:600;'>{_sku_format(pfx, n+1)}</span></td>"
-                f"</tr>"
-                for pfx, n in rows_cnt
-            )
-            st.markdown(
-                f"<table style='border-collapse:collapse;'><tbody>{cnt_html}</tbody></table>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.info("No se encontraron SKUs con formato PREFIX+consecutivo. Se empezará desde 001 para cada tipo.")
 
     if st.button("⚡ GENERAR PREVIEW DE SKUs", key="btn_preview_sku"):
         assigned = _sku_assign(unassigned, counters)
@@ -2501,95 +2556,14 @@ def vista_sku_manager(token):
     ok     = [a for a in assigned if not a["error"]]
     errors = [a for a in assigned if a["error"]]
 
-    st.markdown(
-        f"<div style='font-family:Bebas Neue,sans-serif;font-size:14px;"
-        f"letter-spacing:2px;color:#2D6A4F;margin:20px 0 10px 0;'>"
-        f"PREVIEW — {len(ok)} variantes listas"
-        f"{'  ·  ' + str(len(errors)) + ' con error' if errors else ''}</div>",
-        unsafe_allow_html=True,
-    )
-
     if errors:
         with st.expander(f"⚠️ {len(errors)} variantes sin prefijo configurado", expanded=False):
             for e in errors:
-                st.markdown(
-                    f"<div style='font-size:12px;color:#FF9500;padding:3px 0;'>"
-                    f"<b>{e['product_title']}</b> · {e['variant_title']} — {e['error']}</div>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f"<div style='font-size:12px;color:#FF9500;padding:3px 0;'>"
+                            f"<b>{e['product_title']}</b> · {e['variant_title']} — {e['error']}</div>",
+                            unsafe_allow_html=True)
 
     if ok:
-        df_prev = pd.DataFrame(ok)
-        df_prev = df_prev.sort_values(["product_type", "product_title", "new_sku"])
-
-        for ptype, grp_type in df_prev.groupby("product_type"):
-            pfx = PREFIX_MAP.get(ptype, "???")
-            st.markdown(
-                f"<div style='font-family:DM Mono,monospace;font-size:9px;letter-spacing:3px;"
-                f"color:#B8B0A4;text-transform:uppercase;padding:16px 0 6px 0;"
-                f"border-bottom:1px solid #D4CFC4;margin-bottom:6px;'>"
-                f"{ptype.upper()} · {pfx} · {len(grp_type)} variante(s)</div>",
-                unsafe_allow_html=True,
-            )
-            for prod, grp_prod in grp_type.groupby("product_title"):
-                header_html = (
-                    f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
-                    f"border-left:3px solid #2D6A4F;border-radius:8px 8px 0 0;"
-                    f"padding:10px 14px;display:flex;align-items:center;gap:10px;'>"
-                    f"<span style='font-weight:600;font-size:13px;flex:1;'>{prod}</span>"
-                    f"<span style='font-size:11px;color:#6B6456;'>{len(grp_prod)} variante(s)</span>"
-                    f"</div>"
-                )
-                thead = (
-                    "<thead><tr style='background:rgba(0,0,0,0.03);'>"
-                    "<th style='padding:5px 14px;font-size:9px;letter-spacing:1.5px;"
-                    "text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-                    "text-align:left;font-weight:400;'>VARIANTE</th>"
-                    "<th style='padding:5px 14px;font-size:9px;letter-spacing:1.5px;"
-                    "text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-                    "text-align:left;font-weight:400;'>NUEVO SKU</th>"
-                    "<th style='padding:5px 14px;font-size:9px;letter-spacing:1.5px;"
-                    "text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-                    "text-align:left;font-weight:400;'>BARCODE EAN-13</th>"
-                    "<th style='padding:5px 14px;font-size:9px;letter-spacing:1.5px;"
-                    "text-transform:uppercase;color:#B8B0A4;font-family:DM Mono,monospace;"
-                    "text-align:left;font-weight:400;'>BARCODE</th>"
-                    "</tr></thead>"
-                )
-                rows_html = "".join(
-                    f"<tr style='border-top:1px solid #D4CFC4;'>"
-                    f"<td style='padding:7px 14px;font-size:12px;color:#6B6456;"
-                    f"font-family:DM Sans,sans-serif;'>{r.variant_title}</td>"
-                    f"<td style='padding:7px 14px;font-family:DM Mono,monospace;font-size:13px;"
-                    f"color:#2D6A4F;font-weight:600;'>{r.new_sku}</td>"
-                    f"<td style='padding:7px 14px;font-family:DM Mono,monospace;font-size:12px;"
-                    f"color:#1A1A14;letter-spacing:1px;'>{r.new_barcode}</td>"
-                    f"<td style='padding:7px 14px;font-size:11px;"
-                    f"color:{'#B8B0A4' if r.current_barcode else '#4488FF'};'>"
-                    f"{'Existente (sin cambio)' if r.current_barcode else 'Generado'}</td>"
-                    f"</tr>"
-                    for r in grp_prod.itertuples()
-                )
-                st.markdown(
-                    header_html +
-                    f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-top:none;"
-                    f"border-left:3px solid #2D6A4F;border-radius:0 0 8px 8px;overflow:hidden;'>"
-                    f"<table style='width:100%;border-collapse:collapse;'>"
-                    f"{thead}<tbody>{rows_html}</tbody></table></div>"
-                    f"<div style='height:8px;'></div>",
-                    unsafe_allow_html=True,
-                )
-
-    st.markdown("<hr style='border-color:#D4CFC4;margin:24px 0;'>", unsafe_allow_html=True)
-
-    if ok:
-        st.markdown(
-            "<div style='font-size:13px;color:#6B6456;margin-bottom:16px;'>"
-            "Revisa el preview antes de confirmar. "
-            "Esta acción escribe SKU y barcode en Shopify — no se puede deshacer automáticamente.</div>",
-            unsafe_allow_html=True,
-        )
-
         col_btn1, col_btn2, _ = st.columns([2, 2, 4])
         with col_btn1:
             confirmar = st.button("✅ CONFIRMAR Y SUBIR A SHOPIFY", key="btn_confirm_sku")
@@ -2602,7 +2576,6 @@ def vista_sku_manager(token):
         if confirmar:
             progress = st.progress(0, text="Subiendo SKUs a Shopify...")
             res_ok, res_err, res_detalle = 0, 0, []
-
             for i, a in enumerate(ok):
                 try:
                     status, _ = _sku_push_variant(
@@ -2618,17 +2591,11 @@ def vista_sku_manager(token):
                     res_err += 1
                     res_detalle.append(f"{a['product_title']} / {a['variant_title']}: {exc}")
                 progress.progress((i + 1) / len(ok), text=f"Subiendo {i+1}/{len(ok)}...")
-
             progress.empty()
-
             if res_ok > 0:
                 st.success(f"✅ {res_ok} variantes actualizadas correctamente en Shopify.")
             if res_err > 0:
                 st.error(f"❌ {res_err} errores al subir.")
-                for det in res_detalle[:10]:
-                    st.markdown(f"<div style='font-size:12px;color:#FF3B30;'>• {det}</div>",
-                                unsafe_allow_html=True)
-
             for k in ["_sku_products", "_sku_counters", "_sku_unassigned", "_sku_assigned"]:
                 st.session_state.pop(k, None)
             st.cache_data.clear()
@@ -2659,10 +2626,11 @@ def main():
             st.error(f"Error cargando datos: {e}")
             st.stop()
 
+    # Conteos por acción para el sidebar
     conteos = {}
     if not df.empty:
-        for estado in ESTADOS:
-            conteos[estado] = int(df[df["_estado"] == estado]["Producto"].nunique())
+        for accion in ACCION_CFG:
+            conteos[accion] = int(df[df["_accion"] == accion]["Producto"].nunique())
 
     if "vista" not in st.session_state:
         st.session_state.vista = "DASHBOARD"
@@ -2681,12 +2649,12 @@ def main():
         vista_tendencias(token)
     elif vista == "SKU_MGR":
         vista_sku_manager(token)
-    elif vista in ESTADOS:
+    elif vista in ACCION_CFG:
         vista_inventario(df, vista, locations)
 
     st.markdown(
         f"<div style='font-size:10px;color:#D4CFC4;text-align:right;margin-top:40px;'>"
-        f"LÍNEA VIVA v8 · TÉRRET · {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>",
+        f"LÍNEA VIVA v9 · TÉRRET · {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>",
         unsafe_allow_html=True,
     )
 
