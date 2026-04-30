@@ -1169,238 +1169,237 @@ def construir_df(productos, stock_map, ventas_map, locations):
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 
+@st.dialog("📖 Guía de clasificación", width="large")
+def guia_dialog():
+    """
+    Modal nativo de Streamlit. Se abre con guia_dialog() desde cualquier botón.
+    st.dialog maneja el overlay, el cierre con Escape y el backdrop automáticamente.
+    Los estilos inline garantizan que funcionen sin depender del CSS global.
+    """
+    C = {
+        "bg":       "#F5F0E8",
+        "border":   "#D4CFC4",
+        "muted":    "#6B6456",
+        "faint":    "#B8B0A4",
+        "dark":     "#1A1A14",
+        "green":    "#2D6A4F",
+        "blue":     "#4488FF",
+        "red":      "#FF3B30",
+        "orange":   "#FF9500",
+        "yellow":   "#FFB800",
+        "row_even": "#E8E3D8",
+        "row_odd":  "#EDEAE0",
+    }
+
+    # ── INTRO ──────────────────────────────────────────────────────────────────
+    st.markdown(
+        f"<p style='font-size:13px;color:{C['muted']};line-height:1.65;margin-bottom:4px;'>"
+        f"Cada producto se evalúa en <b style='color:{C['dark']}'>3 dimensiones independientes</b>. "
+        f"Rotación y Stock se calculan con datos de Shopify. "
+        f"La Acción es la conclusión que resulta de cruzarlas — no se configura, se <i>deriva</i>.<br>"
+        f"El objetivo de Línea Viva: tener siempre claro <b style='color:{C['dark']}'>qué hay que reprogramar</b>."
+        f"</p>",
+        unsafe_allow_html=True,
+    )
+    st.divider()
+
+    # ── DIM 1: ROTACIÓN ────────────────────────────────────────────────────────
+    st.markdown(
+        f"<div style='font-family:Bebas Neue,sans-serif;font-size:14px;letter-spacing:3px;"
+        f"color:{C['dark']};margin-bottom:6px;'>DIMENSIÓN 1 — ROTACIÓN</div>"
+        f"<p style='font-size:12px;color:{C['muted']};margin-bottom:10px;'>"
+        f"<b style='color:{C['dark']}'>Pregunta:</b> ¿cuánto vende? &nbsp;·&nbsp; "
+        f"<b style='color:{C['dark']}'>Fuente:</b> unidades vendidas en los últimos 60 días. "
+        f"No depende del stock — un producto puede ser Alta Rotación aunque esté en quiebre.</p>",
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(4)
+    chips = [
+        (cols[0], "🔥", "Alta Rotación",  C["green"],  f"≥ {ROT_ALTA} u en 60d"),
+        (cols[1], "📦", "Media Rotación", C["blue"],   f"≥ {ROT_MEDIA} u en 60d"),
+        (cols[2], "🐢", "Baja Rotación",  C["yellow"], f"≥ {ROT_BAJA} u en 60d"),
+        (cols[3], "⚪", "Sin Ventas",     C["faint"],  "0 u en 60d"),
+    ]
+    for col, icon, label, color, sub in chips:
+        with col:
+            st.markdown(
+                f"<div style='border:1.5px solid {color};border-radius:8px;padding:10px 12px;"
+                f"background:{color}18;'>"
+                f"<div style='font-size:13px;font-weight:600;color:{color};'>{icon} {label}</div>"
+                f"<div style='font-size:10px;color:{C['muted']};margin-top:3px;font-family:monospace;'>{sub}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.divider()
+
+    # ── DIM 2: STOCK ───────────────────────────────────────────────────────────
+    st.markdown(
+        f"<div style='font-family:Bebas Neue,sans-serif;font-size:14px;letter-spacing:3px;"
+        f"color:{C['dark']};margin-bottom:6px;'>DIMENSIÓN 2 — STOCK</div>"
+        f"<p style='font-size:12px;color:{C['muted']};margin-bottom:10px;'>"
+        f"<b style='color:{C['dark']}'>Pregunta:</b> ¿cuántos días de inventario quedan? &nbsp;·&nbsp; "
+        f"<b style='color:{C['dark']}'>Fórmula:</b> stock ÷ (ventas 60d ÷ 60) = días de cobertura.</p>",
+        unsafe_allow_html=True,
+    )
+    cols2 = st.columns(4)
+    chips2 = [
+        (cols2[0], "🔴", "Exceso",    "#FF6B35", f"≥ {STOCK_EXCESO}d"),
+        (cols2[1], "✅", "Saludable", "#00C853", f"≥ {STOCK_SALUDABLE}d"),
+        (cols2[2], "⚠️", "Bajo",      C["yellow"], f"< {STOCK_SALUDABLE}d"),
+        (cols2[3], "❌", "Hueco",     C["red"],  "Stock = 0"),
+    ]
+    for col, icon, label, color, sub in chips2:
+        with col:
+            st.markdown(
+                f"<div style='border:1.5px solid {color};border-radius:8px;padding:10px 12px;"
+                f"background:{color}18;'>"
+                f"<div style='font-size:13px;font-weight:600;color:{color};'>{icon} {label}</div>"
+                f"<div style='font-size:10px;color:{C['muted']};margin-top:3px;font-family:monospace;'>{sub}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.divider()
+
+    # ── DIM 3: ACCIÓN — tabla ──────────────────────────────────────────────────
+    st.markdown(
+        f"<div style='font-family:Bebas Neue,sans-serif;font-size:14px;letter-spacing:3px;"
+        f"color:{C['dark']};margin-bottom:6px;'>DIMENSIÓN 3 — ACCIÓN (derivada automáticamente)</div>"
+        f"<p style='font-size:12px;color:{C['muted']};margin-bottom:10px;'>"
+        f"Resultado de cruzar Rotación × Stock. No se configura directamente — "
+        f"cambia automáticamente si se ajustan los umbrales de las dimensiones anteriores.</p>",
+        unsafe_allow_html=True,
+    )
+
+    BADGE = {
+        "REPROGRAMAR": (f"background:rgba(255,59,48,0.12);color:#CC1A1A;", "⚡ Reprogramar"),
+        "OK":          (f"background:rgba(45,106,79,0.12);color:#1a5c38;",  "✅ OK"),
+        "MONITOREAR":  (f"background:rgba(68,136,255,0.12);color:#2255BB;", "👁 Monitorear"),
+        "LIQUIDAR":    (f"background:rgba(255,149,0,0.12);color:#884400;",  "📦 Liquidar"),
+        "HUECO":       (f"background:rgba(184,176,164,0.2);color:#6B6456;", "⚪ Hueco"),
+    }
+
+    tabla = [
+        ("🔥 Alta",     "❌ Hueco",     "REPROGRAMAR", "Quiebre total — pedir de inmediato"),
+        ("🔥 Alta",     "⚠️ Bajo",      "REPROGRAMAR", "Stock no cubre el tiempo de entrega"),
+        ("📦 Media",    "❌ Hueco",     "REPROGRAMAR", "Sin stock con demanda activa"),
+        ("📦 Media",    "⚠️ Bajo",      "REPROGRAMAR", "El stock se agotará antes de que llegue el pedido"),
+        ("🔥 Alta",     "✅ Saludable", "OK",          "Equilibrado — sin acción requerida"),
+        ("📦 Media",    "✅ Saludable", "OK",          "Equilibrado — sin acción requerida"),
+        ("🐢 Baja",     "⚠️ Bajo",      "OK",          "Poca venta y poco stock — en equilibrio"),
+        ("🔥 Alta",     "🔴 Exceso",    "MONITOREAR",  "Vende bien pero se sobrecompró"),
+        ("📦 Media",    "🔴 Exceso",    "MONITOREAR",  "Stock muy alto para su ritmo de venta"),
+        ("🐢 Baja",     "❌ Hueco",     "MONITOREAR",  "Vende poco y encima no hay stock"),
+        ("⚪ Sin V.",   "⚠️ Bajo",      "MONITOREAR",  "Sin demanda — revisar si el producto continúa"),
+        ("🐢 Baja",     "✅ Saludable", "LIQUIDAR",    "Stock acumulado con poca demanda"),
+        ("🐢 Baja",     "🔴 Exceso",    "LIQUIDAR",    "Mucho stock y casi no vende — urgente"),
+        ("⚪ Sin V.",   "✅ Saludable", "LIQUIDAR",    "No vende pero tiene stock — liberar capital"),
+        ("⚪ Sin V.",   "🔴 Exceso",    "LIQUIDAR",    "No vende y está sobrecomprado — urgente"),
+        ("⚪ Sin V.",   "❌ Hueco",     "HUECO",       "Sin stock y sin ventas — posiblemente descontinuado"),
+    ]
+
+    header = (
+        f"<tr style='background:#D4CFC4;'>"
+        f"<th style='padding:8px 12px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
+        f"color:{C['muted']};font-weight:400;text-align:left;font-family:monospace;'>ROTACIÓN</th>"
+        f"<th style='padding:8px 12px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
+        f"color:{C['muted']};font-weight:400;text-align:left;font-family:monospace;'>STOCK</th>"
+        f"<th style='padding:8px 12px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
+        f"color:{C['muted']};font-weight:400;text-align:left;font-family:monospace;'>ACCIÓN</th>"
+        f"<th style='padding:8px 12px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
+        f"color:{C['muted']};font-weight:400;text-align:left;font-family:monospace;'>QUÉ SIGNIFICA</th>"
+        f"</tr>"
+    )
+    rows = ""
+    for i, (rot, stock, accion, desc) in enumerate(tabla):
+        bg = C["row_even"] if i % 2 == 0 else C["row_odd"]
+        badge_style, badge_text = BADGE[accion]
+        rows += (
+            f"<tr style='background:{bg};'>"
+            f"<td style='padding:9px 12px;font-size:12px;color:{C['dark']};'>{rot}</td>"
+            f"<td style='padding:9px 12px;font-size:12px;color:{C['dark']};'>{stock}</td>"
+            f"<td style='padding:9px 12px;'>"
+            f"<span style='display:inline-block;padding:3px 9px;border-radius:10px;font-size:11px;"
+            f"font-weight:600;white-space:nowrap;{badge_style}'>{badge_text}</span></td>"
+            f"<td style='padding:9px 12px;font-size:12px;color:{C['muted']};'>{desc}</td>"
+            f"</tr>"
+        )
+
+    st.markdown(
+        f"<div style='border-radius:8px;overflow:hidden;border:1px solid {C['border']};'>"
+        f"<table style='width:100%;border-collapse:collapse;'>"
+        f"<thead>{header}</thead><tbody>{rows}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+
+    # ── UMBRALES ───────────────────────────────────────────────────────────────
+    st.markdown(
+        f"<div style='font-family:Bebas Neue,sans-serif;font-size:14px;letter-spacing:3px;"
+        f"color:{C['dark']};margin-bottom:6px;'>UMBRALES ACTUALES</div>"
+        f"<p style='font-size:12px;color:{C['muted']};margin-bottom:12px;'>"
+        f"Modificar solo las constantes al inicio de "
+        f"<code style=\'background:{C['row_odd']};padding:1px 5px;border-radius:3px;\'>linea_viva2.0.py</code>. "
+        f"Un cambio actualiza toda la clasificación automáticamente.</p>",
+        unsafe_allow_html=True,
+    )
+
+    u_col1, u_col2, u_col3 = st.columns(3)
+
+    def umbral_card(col, titulo, items, color_borde):
+        with col:
+            rows_u = "".join(
+                f"<div style=\'margin-bottom:8px;\'>"
+                f"<span style=\'font-size:11px;font-weight:700;font-family:monospace;color:{c};\'>{name}</span>"
+                f"<span style=\'font-family:monospace;font-size:13px;font-weight:700;color:{C['green']};margin-left:8px;\'>{val}</span>"
+                f"<div style=\'font-size:11px;color:{C['muted']};margin-top:1px;\'>{desc}</div>"
+                f"</div>"
+                for name, val, desc, c in items
+            )
+            st.markdown(
+                f"<div style=\'background:{C['row_odd']};border:1px solid {C['border']};"
+                f"border-left:4px solid {color_borde};border-radius:8px;padding:14px 16px;\'>"
+                f"<div style=\'font-family:Bebas Neue,sans-serif;font-size:10px;letter-spacing:2px;"
+                f"color:{C['muted']};margin-bottom:10px;\'>{titulo}</div>"
+                f"{rows_u}</div>",
+                unsafe_allow_html=True,
+            )
+
+    umbral_card(u_col1, "ROTACIÓN", [
+        ("ROT_ALTA",  f"≥ {ROT_ALTA} u",  f"≈ {round(ROT_ALTA/2,1)}+ u/mes",  C["green"]),
+        ("ROT_MEDIA", f"≥ {ROT_MEDIA} u", f"≈ {round(ROT_MEDIA/2,1)}+ u/mes", C["blue"]),
+        ("ROT_BAJA",  f"≥ {ROT_BAJA} u",  "algo se vende",                     C["yellow"]),
+    ], C["green"])
+
+    umbral_card(u_col2, "STOCK", [
+        ("STOCK_EXCESO",    f"≥ {STOCK_EXCESO}d",    f"+{int(STOCK_EXCESO/30)} meses", "#FF6B35"),
+        ("STOCK_SALUDABLE", f"≥ {STOCK_SALUDABLE}d", "mínimo recomendado",             "#00C853"),
+    ], C["blue"])
+
+    umbral_card(u_col3, "OPERATIVOS", [
+        ("LEAD_TIME_DIAS", f"{LEAD_TIME_DIAS}d", "días hasta recibir pedido",   C["muted"]),
+        ("DIAS_OBJETIVO",  f"{DIAS_OBJETIVO}d",  "cobertura deseada post-pedido", C["muted"]),
+        ("MULTIPLO",       f"{MULTIPLO} u",      "mínimo por orden de compra",  C["muted"]),
+    ], C["faint"])
+
+    st.markdown(
+        f"<div style=\'background:{C['row_odd']};border:1px solid {C['border']};"
+        f"border-left:4px solid {C['yellow']};border-radius:6px;"
+        f"padding:10px 14px;margin-top:12px;font-size:12px;color:{C['muted']};line-height:1.5;\'>"
+        f"⚠️ <b style=\'color:{C['dark']};\'>Margen de seguridad actual:</b> "
+        f"STOCK_SALUDABLE ({STOCK_SALUDABLE}d) − LEAD_TIME ({LEAD_TIME_DIAS}d) = "
+        f"<b style=\'color:{C['dark']};\'>{STOCK_SALUDABLE - LEAD_TIME_DIAS} días de margen</b>. "
+        f"Si los proveedores demoran más, considera subir STOCK_SALUDABLE a 45–60 días."
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_guia_flotante():
-    """
-    Guía de clasificación. El botón vive en render_sidebar().
-    Renderiza el panel en el área principal cuando guia_abierta == True.
-    Los estilos .lv-g-* están en el bloque CSS global al inicio del archivo.
-    """
-    if not st.session_state.get("guia_abierta", False):
-        return
-
-    st.markdown(f"""
-    <div class="lv-g-wrap">
-
-        <div class="lv-g-header">
-            <div>
-                <div class="lv-g-header-title">GUÍA DE CLASIFICACIÓN</div>
-                <div class="lv-g-header-sub">Línea Viva v9 · Sistema multidimensional · Térret</div>
-            </div>
-        </div>
-
-        <div class="lv-g-body">
-
-            <div class="lv-g-intro">
-                Cada producto se evalúa en <strong>3 dimensiones independientes</strong>.
-                Las dos primeras (Rotación y Stock) se calculan con datos reales de Shopify.
-                La tercera (Acción) es la conclusión lógica que resulta de cruzar las dos anteriores — no se configura directamente, se <em>deriva</em>.<br><br>
-                El objetivo principal de Línea Viva es tener siempre claro <strong>qué productos se deben reprogramar</strong>:
-                aquellos con demanda activa pero stock insuficiente. Las otras acciones (Liquidar, Monitorear) son información
-                complementaria para gestionar el resto del catálogo.
-            </div>
-
-            <!-- DIM 1: ROTACIÓN -->
-            <div class="lv-g-seccion">
-                <div class="lv-g-seccion-title">DIMENSIÓN 1 — ROTACIÓN</div>
-                <div class="lv-g-dim-desc">
-                    <strong>Pregunta:</strong> ¿cuánto vende este producto?<br>
-                    <strong>Fuente:</strong> unidades vendidas en los últimos 60 días. No depende del stock.
-                    Un producto puede ser Alta Rotación aunque esté en quiebre total.
-                </div>
-                <div class="lv-g-chips">
-                    <div class="lv-g-chip" style="color:#2D6A4F;border-color:#2D6A4F;background:rgba(45,106,79,0.08);">
-                        🔥 Alta Rotación
-                        <span class="lv-g-chip-sub">≥ {ROT_ALTA} u en 60d · ≈ {round(ROT_ALTA/2,1)}+ u/mes</span>
-                    </div>
-                    <div class="lv-g-chip" style="color:#2255BB;border-color:#4488FF;background:rgba(68,136,255,0.08);">
-                        📦 Media Rotación
-                        <span class="lv-g-chip-sub">≥ {ROT_MEDIA} u en 60d · ≈ {round(ROT_MEDIA/2,1)}+ u/mes</span>
-                    </div>
-                    <div class="lv-g-chip" style="color:#8A6A00;border-color:#FFB800;background:rgba(255,184,0,0.08);">
-                        🐢 Baja Rotación
-                        <span class="lv-g-chip-sub">≥ {ROT_BAJA} u en 60d · algo se vende</span>
-                    </div>
-                    <div class="lv-g-chip" style="color:#6B6456;border-color:#B8B0A4;background:rgba(184,176,164,0.12);">
-                        ⚪ Sin Ventas
-                        <span class="lv-g-chip-sub">0 u en 60d · sin demanda registrada</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- DIM 2: STOCK -->
-            <div class="lv-g-seccion">
-                <div class="lv-g-seccion-title">DIMENSIÓN 2 — STOCK</div>
-                <div class="lv-g-dim-desc">
-                    <strong>Pregunta:</strong> ¿cuántos días de inventario quedan?<br>
-                    <strong>Fórmula:</strong> stock disponible ÷ (ventas 60d ÷ 60) = días de cobertura.<br>
-                    Si el producto no tiene ventas, el stock se clasifica como Exceso porque no hay referencia de demanda.
-                </div>
-                <div class="lv-g-chips">
-                    <div class="lv-g-chip" style="color:#AA3300;border-color:#FF6B35;background:rgba(255,107,53,0.08);">
-                        🔴 Exceso
-                        <span class="lv-g-chip-sub">≥ {STOCK_EXCESO}d de cobertura · +{int(STOCK_EXCESO/30)} meses</span>
-                    </div>
-                    <div class="lv-g-chip" style="color:#006622;border-color:#00C853;background:rgba(0,200,83,0.08);">
-                        ✅ Saludable
-                        <span class="lv-g-chip-sub">≥ {STOCK_SALUDABLE}d de cobertura · zona ideal</span>
-                    </div>
-                    <div class="lv-g-chip" style="color:#8A6A00;border-color:#FFB800;background:rgba(255,184,0,0.08);">
-                        ⚠️ Bajo
-                        <span class="lv-g-chip-sub">&gt; 0d pero &lt; {STOCK_SALUDABLE}d · atención</span>
-                    </div>
-                    <div class="lv-g-chip" style="color:#AA1100;border-color:#FF3B30;background:rgba(255,59,48,0.08);">
-                        ❌ Hueco
-                        <span class="lv-g-chip-sub">Stock = 0 · quiebre total</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- DIM 3: ACCIÓN -->
-            <div class="lv-g-seccion">
-                <div class="lv-g-seccion-title">DIMENSIÓN 3 — ACCIÓN (derivada automáticamente)</div>
-                <div class="lv-g-dim-desc">
-                    <strong>Pregunta:</strong> ¿qué hago con este producto?<br>
-                    No se configura — es el resultado de cruzar Rotación × Stock. Si se modifican los umbrales de las
-                    dimensiones 1 o 2, las acciones se recalculan automáticamente en toda la app.
-                </div>
-                <table class="lv-g-table">
-                    <thead>
-                        <tr>
-                            <th>ROTACIÓN</th><th>STOCK</th><th>ACCIÓN</th><th>QUÉ SIGNIFICA</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr><td>🔥 Alta</td><td>❌ Hueco</td>
-                            <td><span class="lv-g-badge" style="background:rgba(255,59,48,0.12);color:#AA1100;">⚡ Reprogramar</span></td>
-                            <td>Quiebre total — pedir de inmediato</td></tr>
-                        <tr><td>🔥 Alta</td><td>⚠️ Bajo</td>
-                            <td><span class="lv-g-badge" style="background:rgba(255,59,48,0.12);color:#AA1100;">⚡ Reprogramar</span></td>
-                            <td>Stock no cubre el tiempo de entrega</td></tr>
-                        <tr><td>📦 Media</td><td>❌ Hueco</td>
-                            <td><span class="lv-g-badge" style="background:rgba(255,59,48,0.12);color:#AA1100;">⚡ Reprogramar</span></td>
-                            <td>Sin stock con demanda activa</td></tr>
-                        <tr><td>📦 Media</td><td>⚠️ Bajo</td>
-                            <td><span class="lv-g-badge" style="background:rgba(255,59,48,0.12);color:#AA1100;">⚡ Reprogramar</span></td>
-                            <td>El stock se agotará antes de que llegue el pedido</td></tr>
-                        <tr><td>🔥 Alta</td><td>✅ Saludable</td>
-                            <td><span class="lv-g-badge" style="background:rgba(45,106,79,0.12);color:#1a5c38;">✅ OK</span></td>
-                            <td>Equilibrado — sin acción requerida</td></tr>
-                        <tr><td>📦 Media</td><td>✅ Saludable</td>
-                            <td><span class="lv-g-badge" style="background:rgba(45,106,79,0.12);color:#1a5c38;">✅ OK</span></td>
-                            <td>Equilibrado — sin acción requerida</td></tr>
-                        <tr><td>🐢 Baja</td><td>⚠️ Bajo</td>
-                            <td><span class="lv-g-badge" style="background:rgba(45,106,79,0.12);color:#1a5c38;">✅ OK</span></td>
-                            <td>Poca venta y poco stock — están en equilibrio</td></tr>
-                        <tr><td>🔥 Alta</td><td>🔴 Exceso</td>
-                            <td><span class="lv-g-badge" style="background:rgba(68,136,255,0.12);color:#2255BB;">👁 Monitorear</span></td>
-                            <td>Vende bien pero se sobrecompró — no pedir más aún</td></tr>
-                        <tr><td>📦 Media</td><td>🔴 Exceso</td>
-                            <td><span class="lv-g-badge" style="background:rgba(68,136,255,0.12);color:#2255BB;">👁 Monitorear</span></td>
-                            <td>Stock muy alto para su ritmo de venta</td></tr>
-                        <tr><td>🐢 Baja</td><td>❌ Hueco</td>
-                            <td><span class="lv-g-badge" style="background:rgba(68,136,255,0.12);color:#2255BB;">👁 Monitorear</span></td>
-                            <td>Producto problema — vende poco y encima no hay stock</td></tr>
-                        <tr><td>⚪ Sin Ventas</td><td>⚠️ Bajo</td>
-                            <td><span class="lv-g-badge" style="background:rgba(68,136,255,0.12);color:#2255BB;">👁 Monitorear</span></td>
-                            <td>Sin demanda — revisar si el producto continúa</td></tr>
-                        <tr><td>🐢 Baja</td><td>✅ Saludable</td>
-                            <td><span class="lv-g-badge" style="background:rgba(255,149,0,0.12);color:#884400;">📦 Liquidar</span></td>
-                            <td>Stock acumulado con poca demanda — precio especial</td></tr>
-                        <tr><td>🐢 Baja</td><td>🔴 Exceso</td>
-                            <td><span class="lv-g-badge" style="background:rgba(255,149,0,0.12);color:#884400;">📦 Liquidar</span></td>
-                            <td>Mucho stock y casi no vende — liquidar urgente</td></tr>
-                        <tr><td>⚪ Sin Ventas</td><td>✅ Saludable</td>
-                            <td><span class="lv-g-badge" style="background:rgba(255,149,0,0.12);color:#884400;">📦 Liquidar</span></td>
-                            <td>No vende pero tiene stock — liberar capital</td></tr>
-                        <tr><td>⚪ Sin Ventas</td><td>🔴 Exceso</td>
-                            <td><span class="lv-g-badge" style="background:rgba(255,149,0,0.12);color:#884400;">📦 Liquidar</span></td>
-                            <td>No vende y está sobrecomprado — caso urgente</td></tr>
-                        <tr><td>⚪ Sin Ventas</td><td>❌ Hueco</td>
-                            <td><span class="lv-g-badge" style="background:rgba(184,176,164,0.2);color:#6B6456;">⚪ Hueco</span></td>
-                            <td>Sin stock y sin ventas — posiblemente descontinuado</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <!-- UMBRALES -->
-            <div class="lv-g-seccion">
-                <div class="lv-g-seccion-title">UMBRALES ACTUALES</div>
-                <div class="lv-g-dim-desc">
-                    Valores configurados en <span class="lv-g-code">linea_viva2.0.py</span>.
-                    Cambiar solo las constantes al inicio del archivo — toda la clasificación se recalcula automáticamente.
-                </div>
-                <div class="lv-g-block" style="border-left:4px solid #2D6A4F;">
-                    <div class="lv-g-block-title">ROTACIÓN — VENTAS EN 60 DÍAS</div>
-                    <div class="lv-g-um-row">
-                        <span class="lv-g-um-name" style="color:#2D6A4F;">ROT_ALTA</span>
-                        <span class="lv-g-um-val">≥ {ROT_ALTA} u</span>
-                        <span class="lv-g-um-desc">Alta Rotación · ≈ {round(ROT_ALTA/2,1)}+ u/mes</span>
-                    </div>
-                    <div class="lv-g-um-row">
-                        <span class="lv-g-um-name" style="color:#2255BB;">ROT_MEDIA</span>
-                        <span class="lv-g-um-val">≥ {ROT_MEDIA} u</span>
-                        <span class="lv-g-um-desc">Media Rotación · ≈ {round(ROT_MEDIA/2,1)}+ u/mes</span>
-                    </div>
-                    <div class="lv-g-um-row">
-                        <span class="lv-g-um-name" style="color:#8A6A00;">ROT_BAJA</span>
-                        <span class="lv-g-um-val">≥ {ROT_BAJA} u</span>
-                        <span class="lv-g-um-desc">Baja Rotación · algo se vende en el período</span>
-                    </div>
-                </div>
-                <div class="lv-g-block" style="margin-top:10px;border-left:4px solid #4488FF;">
-                    <div class="lv-g-block-title">STOCK — DÍAS DE COBERTURA</div>
-                    <div class="lv-g-um-row">
-                        <span class="lv-g-um-name" style="color:#AA3300;">STOCK_EXCESO</span>
-                        <span class="lv-g-um-val">≥ {STOCK_EXCESO}d</span>
-                        <span class="lv-g-um-desc">Más de {int(STOCK_EXCESO/30)} meses de cobertura — sobrecompra</span>
-                    </div>
-                    <div class="lv-g-um-row">
-                        <span class="lv-g-um-name" style="color:#006622;">STOCK_SALUDABLE</span>
-                        <span class="lv-g-um-val">≥ {STOCK_SALUDABLE}d</span>
-                        <span class="lv-g-um-desc">Cobertura mínima recomendada</span>
-                    </div>
-                </div>
-                <div class="lv-g-block" style="margin-top:10px;border-left:4px solid #B8B0A4;">
-                    <div class="lv-g-block-title">PARÁMETROS OPERATIVOS</div>
-                    <div class="lv-g-um-row">
-                        <span class="lv-g-um-name" style="color:#6B6456;">LEAD_TIME_DIAS</span>
-                        <span class="lv-g-um-val">{LEAD_TIME_DIAS}d</span>
-                        <span class="lv-g-um-desc">Días que tarda en llegar un pedido desde que se hace</span>
-                    </div>
-                    <div class="lv-g-um-row">
-                        <span class="lv-g-um-name" style="color:#6B6456;">DIAS_OBJETIVO</span>
-                        <span class="lv-g-um-val">{DIAS_OBJETIVO}d</span>
-                        <span class="lv-g-um-desc">Cobertura deseada después de recibir el pedido</span>
-                    </div>
-                    <div class="lv-g-um-row">
-                        <span class="lv-g-um-name" style="color:#6B6456;">MULTIPLO</span>
-                        <span class="lv-g-um-val">{MULTIPLO} u</span>
-                        <span class="lv-g-um-desc">Cantidad mínima y múltiplo de cada orden de compra</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- POR QUÉ 3 DIMENSIONES -->
-            <div class="lv-g-seccion">
-                <div class="lv-g-seccion-title">POR QUÉ 3 DIMENSIONES</div>
-                <div class="lv-g-dim-desc">
-                    El sistema anterior usaba un solo segmento por producto. El problema: un producto que vende 30 unidades
-                    al mes con stock bajo caía en <em>Reprogramar</em> sin poder distinguir si era más urgente que otro
-                    de 5 unidades en el mismo estado.<br><br>
-                    Con el nuevo sistema, dentro de <strong>Reprogramar</strong> cada producto lleva su etiqueta de rotación —
-                    un producto de <strong>Alta Rotación + Hueco</strong> es considerablemente más urgente que uno de
-                    <strong>Media Rotación + Bajo</strong>, aunque ambos aparezcan en la misma sección.
-                </div>
-                <div class="lv-g-nota">
-                    ⚠️ <strong>Margen de seguridad actual:</strong> STOCK_SALUDABLE ({STOCK_SALUDABLE}d) − LEAD_TIME ({LEAD_TIME_DIAS}d)
-                    = solo <strong>{STOCK_SALUDABLE - LEAD_TIME_DIAS} días de margen</strong> entre que se hace el pedido y que el stock se agota.
-                    Si los proveedores demoran más, considera subir <span class="lv-g-code">STOCK_SALUDABLE</span> a 45 o 60 días.
-                </div>
-            </div>
-
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    """No-op: el dialog se abre directamente desde el botón en render_sidebar."""
+    pass
 
 def render_sidebar(conteos):
     with st.sidebar:
@@ -1451,13 +1450,8 @@ def render_sidebar(conteos):
             st.rerun()
 
         # ── Botón de guía ──────────────────────────────────────────────────────
-        if "guia_abierta" not in st.session_state:
-            st.session_state.guia_abierta = False
-
-        guia_label = "✕  Cerrar guía" if st.session_state.guia_abierta else "📖  Guía de clasificación"
-        if st.button(guia_label, key="btn_guia_toggle"):
-            st.session_state.guia_abierta = not st.session_state.guia_abierta
-            st.rerun()
+        if st.button("📖  Guía de clasificación", key="btn_guia_toggle"):
+            guia_dialog()
 
         user = st.session_state.get("user_name", "")
         if user:
