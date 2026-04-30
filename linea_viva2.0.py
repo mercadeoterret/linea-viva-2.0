@@ -1300,15 +1300,15 @@ def guia_dialog():
     ]
 
     header = (
-        f"<tr style='background:#D4CFC4;'>"
+        f"<tr style='background:#333333;'>"
         f"<th style='padding:8px 12px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
-        f"color:{C['muted']};font-weight:400;text-align:left;font-family:monospace;'>ROTACIÓN</th>"
+        f"color:#AAAAAA;font-weight:400;text-align:left;font-family:monospace;'>ROTACIÓN</th>"
         f"<th style='padding:8px 12px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
-        f"color:{C['muted']};font-weight:400;text-align:left;font-family:monospace;'>STOCK</th>"
+        f"color:#AAAAAA;font-weight:400;text-align:left;font-family:monospace;'>STOCK</th>"
         f"<th style='padding:8px 12px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
-        f"color:{C['muted']};font-weight:400;text-align:left;font-family:monospace;'>ACCIÓN</th>"
+        f"color:#AAAAAA;font-weight:400;text-align:left;font-family:monospace;'>ACCIÓN</th>"
         f"<th style='padding:8px 12px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
-        f"color:{C['muted']};font-weight:400;text-align:left;font-family:monospace;'>QUÉ SIGNIFICA</th>"
+        f"color:#AAAAAA;font-weight:400;text-align:left;font-family:monospace;'>QUÉ SIGNIFICA</th>"
         f"</tr>"
     )
     rows = ""
