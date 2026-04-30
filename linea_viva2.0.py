@@ -2969,6 +2969,23 @@ def vista_rotacion_segmento(df, rotacion, locations):
         st.info("Sin resultados.")
         return
 
+    # ── Sort interactivo ───────────────────────────────────────────────────────
+    ACCION_ORDEN = {"REPROGRAMAR": 0, "OK": 1, "MONITOREAR": 2, "LIQUIDAR": 3, "HUECO": 4}
+    sort_opciones = ["Acción (urgencia)", "Ventas ↓", "Días inv. ↑", "Alfabético"]
+    sort_sel = st.radio("Ordenar por", sort_opciones, horizontal=True,
+                        key=f"sort_rot_{rotacion}", label_visibility="collapsed")
+
+    if sort_sel == "Acción (urgencia)":
+        sub["_sort"] = sub["_accion"].map(ACCION_ORDEN).fillna(9)
+        sub = sub.sort_values(["Tipo", "_sort", "Ventas60d"], ascending=[True, True, False])
+    elif sort_sel == "Ventas ↓":
+        sub = sub.sort_values(["Tipo", "Ventas60d"], ascending=[True, False])
+    elif sort_sel == "Días inv. ↑":
+        sub["_dias_sort"] = sub["DiasInv_n"].replace(9999, 99999)
+        sub = sub.sort_values(["Tipo", "_dias_sort"], ascending=[True, True])
+    else:
+        sub = sub.sort_values(["Tipo", "Producto", "Variante"])
+
     for tipo, dt in sub.groupby("Tipo", sort=False):
         st.markdown(
             f"<div style='font-family:DM Mono,monospace;font-size:9px;letter-spacing:3px;"
