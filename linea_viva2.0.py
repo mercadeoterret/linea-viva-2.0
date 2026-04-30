@@ -1138,6 +1138,527 @@ def construir_df(productos, stock_map, ventas_map, locations):
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 
+def render_guia_flotante():
+    """
+    Panel flotante tipo '?' siempre visible en la esquina inferior derecha.
+    Al hacer clic se despliega la guía completa del sistema de clasificación.
+    Implementado con HTML/CSS/JS puro inyectado via st.markdown().
+    """
+    st.markdown(f"""
+    <style>
+    /* ── Botón flotante ── */
+    #lv-guia-btn {{
+        position: fixed;
+        bottom: 28px;
+        right: 28px;
+        z-index: 99999;
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        background: #2D6A4F;
+        color: #F5F0E8;
+        font-family: 'Bebas Neue', sans-serif;
+        font-size: 20px;
+        letter-spacing: 0;
+        border: none;
+        cursor: pointer;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.22);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.18s, transform 0.15s;
+        user-select: none;
+    }}
+    #lv-guia-btn:hover {{
+        background: #1a4a35;
+        transform: scale(1.07);
+    }}
+    /* ── Overlay de fondo ── */
+    #lv-guia-overlay {{
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(26,26,20,0.45);
+        z-index: 99998;
+        backdrop-filter: blur(2px);
+    }}
+    /* ── Panel ── */
+    #lv-guia-panel {{
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 99999;
+        width: min(780px, 94vw);
+        max-height: 88vh;
+        overflow-y: auto;
+        background: #F5F0E8;
+        border: 1px solid #D4CFC4;
+        border-radius: 12px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.28);
+        font-family: 'DM Sans', sans-serif;
+        color: #1A1A14;
+        scrollbar-width: thin;
+        scrollbar-color: #D4CFC4 #F5F0E8;
+    }}
+    #lv-guia-panel::-webkit-scrollbar {{ width: 6px; }}
+    #lv-guia-panel::-webkit-scrollbar-thumb {{ background: #D4CFC4; border-radius: 3px; }}
+    .lv-g-header {{
+        position: sticky;
+        top: 0;
+        background: #2D6A4F;
+        padding: 18px 24px 16px;
+        border-radius: 12px 12px 0 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        z-index: 1;
+    }}
+    .lv-g-header-title {{
+        font-family: 'Bebas Neue', sans-serif;
+        font-size: 20px;
+        letter-spacing: 3px;
+        color: #F5F0E8;
+        line-height: 1;
+    }}
+    .lv-g-header-sub {{
+        font-size: 10px;
+        color: rgba(245,240,232,0.65);
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        margin-top: 3px;
+    }}
+    .lv-g-close {{
+        background: rgba(245,240,232,0.15);
+        border: none;
+        color: #F5F0E8;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        font-size: 18px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s;
+        flex-shrink: 0;
+    }}
+    .lv-g-close:hover {{ background: rgba(245,240,232,0.28); }}
+    .lv-g-body {{ padding: 24px 28px 32px; }}
+    .lv-g-intro {{
+        font-size: 13px;
+        color: #6B6456;
+        line-height: 1.6;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid #D4CFC4;
+    }}
+    .lv-g-seccion {{
+        margin-bottom: 28px;
+    }}
+    .lv-g-seccion-title {{
+        font-family: 'Bebas Neue', sans-serif;
+        font-size: 15px;
+        letter-spacing: 3px;
+        color: #1A1A14;
+        margin-bottom: 10px;
+        padding-bottom: 6px;
+        border-bottom: 2px solid #D4CFC4;
+    }}
+    .lv-g-dim-desc {{
+        font-size: 12px;
+        color: #6B6456;
+        margin-bottom: 10px;
+        line-height: 1.5;
+    }}
+    .lv-g-chips {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 4px;
+    }}
+    .lv-g-chip {{
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 500;
+        border: 1.5px solid;
+    }}
+    .lv-g-chip-sub {{
+        font-family: 'DM Mono', monospace;
+        font-size: 10px;
+        opacity: 0.75;
+        margin-top: 1px;
+    }}
+    .lv-g-table {{
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin-top: 4px;
+    }}
+    .lv-g-table th {{
+        font-family: 'DM Mono', monospace;
+        font-size: 9px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: #B8B0A4;
+        font-weight: 400;
+        padding: 6px 10px;
+        text-align: left;
+        border-bottom: 1px solid #D4CFC4;
+    }}
+    .lv-g-table td {{
+        padding: 9px 10px;
+        border-bottom: 1px solid #EDEAE0;
+        vertical-align: middle;
+        color: #1A1A14;
+        line-height: 1.4;
+    }}
+    .lv-g-table tr:last-child td {{ border-bottom: none; }}
+    .lv-g-badge {{
+        display: inline-block;
+        padding: 3px 9px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+    }}
+    .lv-g-umbrales {{
+        background: #EDEAE0;
+        border: 1px solid #D4CFC4;
+        border-left: 4px solid #2D6A4F;
+        border-radius: 6px;
+        padding: 14px 18px;
+        margin-top: 8px;
+    }}
+    .lv-g-umbrales-title {{
+        font-family: 'Bebas Neue', sans-serif;
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: #6B6456;
+        margin-bottom: 10px;
+    }}
+    .lv-g-um-row {{
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 6px;
+        font-size: 12px;
+    }}
+    .lv-g-um-name {{
+        font-weight: 600;
+        min-width: 120px;
+    }}
+    .lv-g-um-val {{
+        font-family: 'DM Mono', monospace;
+        color: #2D6A4F;
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    .lv-g-um-desc {{
+        color: #6B6456;
+        font-size: 11px;
+    }}
+    .lv-g-nota {{
+        background: #EDEAE0;
+        border: 1px solid #D4CFC4;
+        border-left: 3px solid #FFB800;
+        border-radius: 6px;
+        padding: 10px 14px;
+        font-size: 11px;
+        color: #6B6456;
+        line-height: 1.5;
+        margin-top: 16px;
+    }}
+    </style>
+
+    <!-- Botón flotante -->
+    <button id="lv-guia-btn" onclick="lvGuiaOpen()" title="Guía de clasificación">?</button>
+
+    <!-- Overlay -->
+    <div id="lv-guia-overlay" onclick="lvGuiaClose()"></div>
+
+    <!-- Panel -->
+    <div id="lv-guia-panel">
+        <div class="lv-g-header">
+            <div>
+                <div class="lv-g-header-title">GUÍA DE CLASIFICACIÓN</div>
+                <div class="lv-g-header-sub">Línea Viva v9 · Sistema multidimensional</div>
+            </div>
+            <button class="lv-g-close" onclick="lvGuiaClose()">✕</button>
+        </div>
+        <div class="lv-g-body">
+
+            <div class="lv-g-intro">
+                Cada producto se evalúa en <strong>3 dimensiones independientes</strong>.
+                Las dos primeras (Rotación y Stock) se calculan con datos de Shopify.
+                La tercera (Acción) es la conclusión lógica que resulta de cruzar las dos anteriores.
+                <br><br>
+                El objetivo principal de Línea Viva es tener siempre claro
+                <strong>qué productos se deben reprogramar</strong> — es decir, cuáles tienen
+                demanda activa pero stock insuficiente para cubrirla.
+            </div>
+
+            <!-- DIMENSIÓN 1: ROTACIÓN -->
+            <div class="lv-g-seccion">
+                <div class="lv-g-seccion-title">DIMENSIÓN 1 — ROTACIÓN</div>
+                <div class="lv-g-dim-desc">
+                    <strong>Pregunta:</strong> ¿cuánto vende este producto?<br>
+                    <strong>Fuente:</strong> unidades vendidas en los últimos 60 días.<br>
+                    No considera el stock — solo el comportamiento de venta.
+                </div>
+                <div class="lv-g-chips">
+                    <div class="lv-g-chip" style="color:#2D6A4F;border-color:#2D6A4F;background:#2D6A4F18;">
+                        🔥 Alta Rotación
+                        <span class="lv-g-chip-sub">≥ {ROT_ALTA} u / 60d</span>
+                    </div>
+                    <div class="lv-g-chip" style="color:#4488FF;border-color:#4488FF;background:#4488FF18;">
+                        📦 Media Rotación
+                        <span class="lv-g-chip-sub">≥ {ROT_MEDIA} u / 60d</span>
+                    </div>
+                    <div class="lv-g-chip" style="color:#FFB800;border-color:#FFB800;background:#FFB80018;">
+                        🐢 Baja Rotación
+                        <span class="lv-g-chip-sub">≥ {ROT_BAJA} u / 60d</span>
+                    </div>
+                    <div class="lv-g-chip" style="color:#B8B0A4;border-color:#B8B0A4;background:#B8B0A418;">
+                        ⚪ Sin Ventas
+                        <span class="lv-g-chip-sub">0 u / 60d</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DIMENSIÓN 2: STOCK -->
+            <div class="lv-g-seccion">
+                <div class="lv-g-seccion-title">DIMENSIÓN 2 — STOCK</div>
+                <div class="lv-g-dim-desc">
+                    <strong>Pregunta:</strong> ¿cuántos días de inventario quedan?<br>
+                    <strong>Fórmula:</strong> stock disponible ÷ (ventas 60d ÷ 60) = días de cobertura.<br>
+                    Si el producto no tiene ventas, el stock se trata como Exceso (sin referencia de demanda).
+                </div>
+                <div class="lv-g-chips">
+                    <div class="lv-g-chip" style="color:#FF6B35;border-color:#FF6B35;background:#FF6B3518;">
+                        🔴 Exceso
+                        <span class="lv-g-chip-sub">≥ {STOCK_EXCESO}d de cobertura</span>
+                    </div>
+                    <div class="lv-g-chip" style="color:#00C853;border-color:#00C853;background:#00C85318;">
+                        ✅ Saludable
+                        <span class="lv-g-chip-sub">≥ {STOCK_SALUDABLE}d de cobertura</span>
+                    </div>
+                    <div class="lv-g-chip" style="color:#FFB800;border-color:#FFB800;background:#FFB80018;">
+                        ⚠️ Bajo
+                        <span class="lv-g-chip-sub">&gt; 0d, pero &lt; {STOCK_SALUDABLE}d</span>
+                    </div>
+                    <div class="lv-g-chip" style="color:#FF3B30;border-color:#FF3B30;background:#FF3B3018;">
+                        ❌ Hueco
+                        <span class="lv-g-chip-sub">Stock = 0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DIMENSIÓN 3: ACCIÓN -->
+            <div class="lv-g-seccion">
+                <div class="lv-g-seccion-title">DIMENSIÓN 3 — ACCIÓN (derivada)</div>
+                <div class="lv-g-dim-desc">
+                    <strong>Pregunta:</strong> ¿qué hago con este producto?<br>
+                    Es la conclusión que resulta de cruzar Rotación × Stock.
+                    No se modifica directamente — cambia automáticamente si se ajustan los umbrales.
+                </div>
+                <table class="lv-g-table">
+                    <thead>
+                        <tr>
+                            <th>ROTACIÓN</th>
+                            <th>STOCK</th>
+                            <th>ACCIÓN</th>
+                            <th>INTERPRETACIÓN</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>🔥 Alta</td><td>❌ Hueco</td>
+                            <td><span class="lv-g-badge" style="background:#FF3B3020;color:#FF3B30;">⚡ Reprogramar</span></td>
+                            <td>Quiebre total — pedir urgente</td>
+                        </tr>
+                        <tr>
+                            <td>🔥 Alta</td><td>⚠️ Bajo</td>
+                            <td><span class="lv-g-badge" style="background:#FF3B3020;color:#FF3B30;">⚡ Reprogramar</span></td>
+                            <td>Stock no alcanza el lead time</td>
+                        </tr>
+                        <tr>
+                            <td>📦 Media</td><td>❌ Hueco</td>
+                            <td><span class="lv-g-badge" style="background:#FF3B3020;color:#FF3B30;">⚡ Reprogramar</span></td>
+                            <td>Sin stock con demanda activa</td>
+                        </tr>
+                        <tr>
+                            <td>📦 Media</td><td>⚠️ Bajo</td>
+                            <td><span class="lv-g-badge" style="background:#FF3B3020;color:#FF3B30;">⚡ Reprogramar</span></td>
+                            <td>Stock pronto se agotará</td>
+                        </tr>
+                        <tr style="background:#F5F0E8;">
+                            <td>🔥 Alta</td><td>✅ Saludable</td>
+                            <td><span class="lv-g-badge" style="background:#2D6A4F20;color:#2D6A4F;">✅ OK</span></td>
+                            <td>Equilibrado — sin acción requerida</td>
+                        </tr>
+                        <tr style="background:#F5F0E8;">
+                            <td>📦 Media</td><td>✅ Saludable</td>
+                            <td><span class="lv-g-badge" style="background:#2D6A4F20;color:#2D6A4F;">✅ OK</span></td>
+                            <td>Equilibrado — sin acción requerida</td>
+                        </tr>
+                        <tr style="background:#F5F0E8;">
+                            <td>🐢 Baja</td><td>⚠️ Bajo</td>
+                            <td><span class="lv-g-badge" style="background:#2D6A4F20;color:#2D6A4F;">✅ OK</span></td>
+                            <td>Poca venta, poco stock — en equilibrio</td>
+                        </tr>
+                        <tr>
+                            <td>🔥 Alta</td><td>🔴 Exceso</td>
+                            <td><span class="lv-g-badge" style="background:#4488FF20;color:#4488FF;">👁 Monitorear</span></td>
+                            <td>Vende bien pero se sobrecompró</td>
+                        </tr>
+                        <tr>
+                            <td>📦 Media</td><td>🔴 Exceso</td>
+                            <td><span class="lv-g-badge" style="background:#4488FF20;color:#4488FF;">👁 Monitorear</span></td>
+                            <td>Stock alto para su ritmo de venta</td>
+                        </tr>
+                        <tr>
+                            <td>🐢 Baja</td><td>❌ Hueco</td>
+                            <td><span class="lv-g-badge" style="background:#4488FF20;color:#4488FF;">👁 Monitorear</span></td>
+                            <td>Producto problema — vende poco y no hay stock</td>
+                        </tr>
+                        <tr>
+                            <td>⚪ Sin Ventas</td><td>⚠️ Bajo</td>
+                            <td><span class="lv-g-badge" style="background:#4488FF20;color:#4488FF;">👁 Monitorear</span></td>
+                            <td>Sin demanda — revisar si continúa</td>
+                        </tr>
+                        <tr>
+                            <td>🐢 Baja</td><td>✅ Saludable</td>
+                            <td><span class="lv-g-badge" style="background:#FF950020;color:#FF9500;">📦 Liquidar</span></td>
+                            <td>Stock acumulado con poca demanda</td>
+                        </tr>
+                        <tr>
+                            <td>🐢 Baja</td><td>🔴 Exceso</td>
+                            <td><span class="lv-g-badge" style="background:#FF950020;color:#FF9500;">📦 Liquidar</span></td>
+                            <td>Mucho stock, casi no vende — urgente</td>
+                        </tr>
+                        <tr>
+                            <td>⚪ Sin Ventas</td><td>✅ Saludable</td>
+                            <td><span class="lv-g-badge" style="background:#FF950020;color:#FF9500;">📦 Liquidar</span></td>
+                            <td>No vende pero tiene stock — sacar precio</td>
+                        </tr>
+                        <tr>
+                            <td>⚪ Sin Ventas</td><td>🔴 Exceso</td>
+                            <td><span class="lv-g-badge" style="background:#FF950020;color:#FF9500;">📦 Liquidar</span></td>
+                            <td>No vende y está sobrecomprado — urgente</td>
+                        </tr>
+                        <tr>
+                            <td>⚪ Sin Ventas</td><td>❌ Hueco</td>
+                            <td><span class="lv-g-badge" style="background:#B8B0A420;color:#B8B0A4;">⚪ Hueco</span></td>
+                            <td>Sin stock y sin ventas — posiblemente descontinuado</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- UMBRALES ACTUALES -->
+            <div class="lv-g-seccion">
+                <div class="lv-g-seccion-title">UMBRALES ACTUALES</div>
+                <div class="lv-g-dim-desc">
+                    Estos son los valores configurados en el código. Para modificarlos, editar las
+                    constantes al inicio del archivo <code>linea_viva2.0.py</code>.
+                    Un cambio en estos valores afecta automáticamente toda la clasificación.
+                </div>
+                <div class="lv-g-umbrales">
+                    <div class="lv-g-umbrales-title">ROTACIÓN — VENTAS EN 60 DÍAS</div>
+                    <div class="lv-g-um-row">
+                        <span class="lv-g-um-name" style="color:#2D6A4F;">ROT_ALTA</span>
+                        <span class="lv-g-um-val">≥ {ROT_ALTA} unidades</span>
+                        <span class="lv-g-um-desc">≈ {round(ROT_ALTA/2, 1)}+ u/mes</span>
+                    </div>
+                    <div class="lv-g-um-row">
+                        <span class="lv-g-um-name" style="color:#4488FF;">ROT_MEDIA</span>
+                        <span class="lv-g-um-val">≥ {ROT_MEDIA} unidades</span>
+                        <span class="lv-g-um-desc">≈ {round(ROT_MEDIA/2, 1)}+ u/mes</span>
+                    </div>
+                    <div class="lv-g-um-row">
+                        <span class="lv-g-um-name" style="color:#FFB800;">ROT_BAJA</span>
+                        <span class="lv-g-um-val">≥ {ROT_BAJA} unidad</span>
+                        <span class="lv-g-um-desc">algo se vende en 60d</span>
+                    </div>
+                </div>
+                <div class="lv-g-umbrales" style="margin-top:10px;border-left-color:#4488FF;">
+                    <div class="lv-g-umbrales-title">STOCK — DÍAS DE COBERTURA</div>
+                    <div class="lv-g-um-row">
+                        <span class="lv-g-um-name" style="color:#FF6B35;">STOCK_EXCESO</span>
+                        <span class="lv-g-um-val">≥ {STOCK_EXCESO} días</span>
+                        <span class="lv-g-um-desc">más de {round(STOCK_EXCESO/30, 1)} meses</span>
+                    </div>
+                    <div class="lv-g-um-row">
+                        <span class="lv-g-um-name" style="color:#00C853;">STOCK_SALUDABLE</span>
+                        <span class="lv-g-um-val">≥ {STOCK_SALUDABLE} días</span>
+                        <span class="lv-g-um-desc">mínimo recomendado</span>
+                    </div>
+                    <div class="lv-g-um-row">
+                        <span class="lv-g-um-name" style="color:#FFB800;">LEAD_TIME</span>
+                        <span class="lv-g-um-val">{LEAD_TIME_DIAS} días</span>
+                        <span class="lv-g-um-desc">tiempo que tarda en llegar un pedido</span>
+                    </div>
+                    <div class="lv-g-um-row">
+                        <span class="lv-g-um-name" style="color:#6B6456;">DIAS_OBJETIVO</span>
+                        <span class="lv-g-um-val">{DIAS_OBJETIVO} días</span>
+                        <span class="lv-g-um-desc">cobertura deseada después del pedido</span>
+                    </div>
+                    <div class="lv-g-um-row">
+                        <span class="lv-g-um-name" style="color:#6B6456;">MULTIPLO</span>
+                        <span class="lv-g-um-val">{MULTIPLO} unidades</span>
+                        <span class="lv-g-um-desc">mínimo y múltiplo de cada pedido</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VENTAJA VS SISTEMA ANTERIOR -->
+            <div class="lv-g-seccion">
+                <div class="lv-g-seccion-title">POR QUÉ 3 DIMENSIONES</div>
+                <div class="lv-g-dim-desc">
+                    El sistema anterior usaba un solo segmento por producto. El problema:
+                    un producto que vende 30 unidades al mes pero tiene stock bajo
+                    caía en <em>Reprogramar</em> y nunca se sabía qué tan urgente era
+                    vs. otro que vende 5 unidades en la misma categoría.<br><br>
+                    Con el nuevo sistema, dentro de <strong>Reprogramar</strong> puedes ver
+                    la etiqueta de rotación de cada producto — lo que permite priorizar:
+                    un producto de <strong>Alta Rotación + Hueco</strong> es más crítico que
+                    uno de <strong>Media Rotación + Bajo</strong>, aunque ambos aparezcan
+                    en la misma categoría de acción.
+                </div>
+                <div class="lv-g-nota">
+                    ⚠️ <strong>Stock Saludable</strong> actual = {STOCK_SALUDABLE} días.
+                    Con un lead time de {LEAD_TIME_DIAS} días, esto deja solo {STOCK_SALUDABLE - LEAD_TIME_DIAS} días
+                    de margen entre que se hace el pedido y que el stock se agota.
+                    Si los proveedores demoran más, considera subir STOCK_SALUDABLE a 45 o 60 días.
+                </div>
+            </div>
+
+        </div><!-- /body -->
+    </div><!-- /panel -->
+
+    <script>
+    function lvGuiaOpen() {{
+        document.getElementById('lv-guia-overlay').style.display = 'block';
+        document.getElementById('lv-guia-panel').style.display = 'block';
+        document.getElementById('lv-guia-panel').scrollTop = 0;
+    }}
+    function lvGuiaClose() {{
+        document.getElementById('lv-guia-overlay').style.display = 'none';
+        document.getElementById('lv-guia-panel').style.display = 'none';
+    }}
+    document.addEventListener('keydown', function(e) {{
+        if (e.key === 'Escape') lvGuiaClose();
+    }});
+    </script>
+    """, unsafe_allow_html=True)
+
+
 def render_sidebar(conteos):
     with st.sidebar:
         st.markdown(
@@ -2636,6 +3157,7 @@ def main():
         st.session_state.vista = "DASHBOARD"
 
     render_sidebar(conteos)
+    render_guia_flotante()
 
     vista = st.session_state.get("vista", "DASHBOARD")
 
