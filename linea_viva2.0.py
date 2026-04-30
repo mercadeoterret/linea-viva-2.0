@@ -1443,6 +1443,20 @@ def render_sidebar(conteos):
                 st.session_state.vista = accion
                 st.rerun()
 
+        st.markdown(
+            "<hr style='border-color:#D4CFC4;margin:6px 0;'>"
+            "<div style='font-size:9px;color:#B8B0A4;letter-spacing:1.5px;"
+            "text-transform:uppercase;padding:6px 4px 4px 4px;'>Inventario por Rotación</div>",
+            unsafe_allow_html=True,
+        )
+
+        for rot in ["ALTA", "MEDIA", "BAJA", "NULA"]:
+            cfg_r = ROTACION_CFG[rot]
+            cnt_r = conteos.get(f"ROT_{rot}", 0)
+            if st.button(f"{cfg_r['icon']}  {cfg_r['label']}   {cnt_r}", key=f"nav_rot_{rot}"):
+                st.session_state.vista = f"ROT_{rot}"
+                st.rerun()
+
         st.markdown("<hr style='border-color:#D4CFC4;margin:6px 0;'>", unsafe_allow_html=True)
 
         if st.button("🔄  Refrescar datos", key="btn_refresh"):
@@ -2869,6 +2883,160 @@ def vista_sku_manager(token):
             st.rerun()
 
 
+# ─── MÓDULO: INVENTARIO POR ROTACIÓN ─────────────────────────────────────────
+
+def vista_rotacion_segmento(df, rotacion, locations):
+    """Vista de productos filtrados por nivel de rotación de ventas."""
+    cfg_r = ROTACION_CFG[rotacion]
+    color = cfg_r["color"]
+
+    desc_map = {
+        "ALTA":  f"≥ {ROT_ALTA} unidades vendidas en 60 días. Productos con demanda consistente.",
+        "MEDIA": f"Entre {ROT_MEDIA} y {ROT_ALTA-1} u en 60d. Se venden regularmente pero sin destacar.",
+        "BAJA":  f"Entre {ROT_BAJA} y {ROT_MEDIA-1} u en 60d. Algo se vende, pero poco.",
+        "NULA":  "0 unidades vendidas en 60 días. Tienen stock activo pero sin movimiento reciente.",
+    }
+
+    st.markdown(
+        f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-left:4px solid {color};"
+        f"border-radius:8px;padding:14px 18px;margin-bottom:20px;"
+        f"display:flex;align-items:center;gap:14px;'>"
+        f"<div style='font-size:24px;'>{cfg_r['icon']}</div>"
+        f"<div>"
+        f"<div style='font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:2px;color:{color};'>"
+        f"{cfg_r['label'].upper()}</div>"
+        f"<div style='font-size:12px;color:#6B6456;margin-top:2px;'>{desc_map[rotacion]}</div>"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    sub = df[df["_rotacion"] == rotacion].copy()
+
+    if sub.empty:
+        st.info("Sin productos en este nivel de rotación.")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.metric("SKUs",          len(sub))
+    with c2: st.metric("Productos",     sub["Producto"].nunique())
+    with c3: st.metric("Stock total",   int(sub["Stock"].sum()))
+    with c4: st.metric("Ventas 60d",    int(sub["Ventas60d"].sum()))
+
+    # Distribución de acciones dentro de este segmento
+    acc_counts = sub.groupby("_accion")["Producto"].nunique()
+    if not acc_counts.empty:
+        st.markdown(
+            "<div style='font-size:9px;color:#B8B0A4;letter-spacing:1.5px;"
+            "text-transform:uppercase;margin:12px 0 6px 0;'>Distribución por acción</div>",
+            unsafe_allow_html=True,
+        )
+        acc_cols = st.columns(len(acc_counts))
+        for i, (accion, cnt) in enumerate(acc_counts.items()):
+            cfg_a = ACCION_CFG.get(accion, {})
+            a_color = cfg_a.get("color", "#B8B0A4")
+            with acc_cols[i]:
+                st.markdown(
+                    f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
+                    f"border-left:3px solid {a_color};border-radius:6px;padding:8px 12px;'>"
+                    f"<div style='font-size:9px;letter-spacing:1.5px;text-transform:uppercase;"
+                    f"color:#6B6456;margin-bottom:3px;'>{cfg_a.get('icon','')} {cfg_a.get('label', accion)}</div>"
+                    f"<div style='font-family:Bebas Neue,sans-serif;font-size:1.4rem;"
+                    f"color:{a_color};line-height:1;'>{cnt}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+    st.markdown("<hr style='border-color:#D4CFC4;margin:12px 0;'>", unsafe_allow_html=True)
+
+    fb1, fb2 = st.columns([3, 2])
+    with fb1:
+        buscar = st.text_input("Buscar", placeholder="Buscar producto...",
+                               label_visibility="collapsed", key=f"buscar_rot_{rotacion}")
+    with fb2:
+        tipos_disp = sorted(sub["Tipo"].dropna().unique().tolist())
+        tipo_sel   = st.selectbox("Categoría", ["Todas"] + tipos_disp,
+                                  label_visibility="collapsed", key=f"tipo_rot_{rotacion}")
+
+    if tipo_sel != "Todas":
+        sub = sub[sub["Tipo"] == tipo_sel]
+    if buscar:
+        sub = sub[sub["Producto"].str.contains(buscar, case=False, na=False)]
+
+    if sub.empty:
+        st.info("Sin resultados.")
+        return
+
+    for tipo, dt in sub.groupby("Tipo", sort=False):
+        st.markdown(
+            f"<div style='font-family:DM Mono,monospace;font-size:9px;letter-spacing:3px;"
+            f"color:#B8B0A4;text-transform:uppercase;padding:20px 0 6px 0;"
+            f"border-bottom:1px solid #D4CFC4;margin-bottom:8px;'>"
+            f"{tipo.upper()} · {dt['Producto'].nunique()} productos</div>",
+            unsafe_allow_html=True,
+        )
+        for prod, gp in dt.groupby("Producto", sort=False):
+            gp = gp.copy().sort_values("Variante")
+            accion_prod = gp["_accion"].mode()[0]
+            cfg_a  = ACCION_CFG.get(accion_prod, {})
+            a_color = cfg_a.get("color", "#B8B0A4")
+
+            st.markdown(
+                f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;"
+                f"border-left:3px solid {color};"
+                f"border-radius:8px 8px 0 0;padding:11px 14px;"
+                f"display:flex;align-items:center;gap:10px;'>"
+                f"<div style='font-weight:600;font-size:14px;flex:1;'>{prod.upper()}</div>"
+                f"<div style='font-size:11px;padding:2px 8px;border-radius:10px;"
+                f"background:{a_color}22;color:{a_color};'>"
+                f"{cfg_a.get('icon','')} {cfg_a.get('label', accion_prod)}</div>"
+                f"<div style='font-size:11px;color:#6B6456;'>{len(gp)} talla{'s' if len(gp)>1 else ''}</div>"
+                f"</div>"
+                f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-top:none;"
+                f"border-left:3px solid {color};"
+                f"display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr;"
+                f"gap:8px;padding:5px 14px;"
+                f"font-size:9px;color:#6B6456;letter-spacing:1.5px;text-transform:uppercase;"
+                f"font-family:DM Mono,monospace;'>"
+                f"<div>VARIANTE</div><div>STOCK</div><div>DÍAS INV.</div>"
+                f"<div>VENTAS 60D</div><div>ACCIÓN</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            for _, row in gp.iterrows():
+                dias_n   = float(row["DiasInv_n"])
+                dias_str = str(int(dias_n)) if dias_n < 9999 else "∞"
+                row_accion = row["_accion"]
+                cfg_ra = ACCION_CFG.get(row_accion, {})
+                ra_color = cfg_ra.get("color", "#B8B0A4")
+
+                st.markdown(
+                    f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-top:none;"
+                    f"border-left:3px solid {color};"
+                    f"display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr;"
+                    f"gap:8px;padding:8px 14px;border-top:1px solid #D4CFC4;"
+                    f"align-items:center;font-size:13px;'>"
+                    f"<div style='font-weight:500;'>{row['Variante']}</div>"
+                    f"<div style='font-family:DM Mono,monospace;color:#6B6456;font-size:12px;'>{int(row['Stock'])} u</div>"
+                    f"<div style='font-family:Bebas Neue,sans-serif;font-size:22px;line-height:1;"
+                    f"color:{color};'>{dias_str}</div>"
+                    f"<div style='font-size:12px;color:#6B6456;'>{int(row['Ventas60d'])} u</div>"
+                    f"<div style='font-size:10px;padding:2px 6px;border-radius:8px;"
+                    f"background:{ra_color}22;color:{ra_color};white-space:nowrap;'>"
+                    f"{cfg_ra.get('icon','')} {cfg_ra.get('label', row_accion)}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                f"<div style='background:#EDEAE0;border:1px solid #D4CFC4;border-top:none;"
+                f"border-left:3px solid {color};"
+                f"border-radius:0 0 8px 8px;height:6px;'></div>"
+                f"<div style='height:8px;'></div>",
+                unsafe_allow_html=True,
+            )
+
+
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -2898,6 +3066,8 @@ def main():
     if not df.empty:
         for accion in ACCION_CFG:
             conteos[accion] = int(df[df["_accion"] == accion]["Producto"].nunique())
+        for rot in ["ALTA", "MEDIA", "BAJA", "NULA"]:
+            conteos[f"ROT_{rot}"] = int(df[df["_rotacion"] == rot]["Producto"].nunique())
 
     if "vista" not in st.session_state:
         st.session_state.vista = "DASHBOARD"
@@ -2919,6 +3089,9 @@ def main():
         vista_sku_manager(token)
     elif vista in ACCION_CFG:
         vista_inventario(df, vista, locations)
+    elif vista.startswith("ROT_"):
+        rot = vista.replace("ROT_", "")
+        vista_rotacion_segmento(df, rot, locations)
 
     st.markdown(
         f"<div style='font-size:10px;color:#D4CFC4;text-align:right;margin-top:40px;'>"
