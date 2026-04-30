@@ -2894,7 +2894,7 @@ def vista_rotacion_segmento(df, rotacion, locations):
         "ALTA":  f"≥ {ROT_ALTA} unidades vendidas en 60 días. Productos con demanda consistente.",
         "MEDIA": f"Entre {ROT_MEDIA} y {ROT_ALTA-1} u en 60d. Se venden regularmente pero sin destacar.",
         "BAJA":  f"Entre {ROT_BAJA} y {ROT_MEDIA-1} u en 60d. Algo se vende, pero poco.",
-        "NULA":  "0 unidades vendidas en 60 días. Tienen stock activo pero sin movimiento reciente.",
+        "NULA":  "Con stock disponible pero 0 ventas en 60 días. Capital inmovilizado sin demanda — candidatos a liquidar.",
     }
 
     st.markdown(
@@ -2910,7 +2910,10 @@ def vista_rotacion_segmento(df, rotacion, locations):
         unsafe_allow_html=True,
     )
 
-    sub = df[df["_rotacion"] == rotacion].copy()
+    if rotacion == "NULA":
+        sub = df[(df["_rotacion"] == "NULA") & (df["Stock"] > 0)].copy()
+    else:
+        sub = df[df["_rotacion"] == rotacion].copy()
 
     if sub.empty:
         st.info("Sin productos en este nivel de rotación.")
