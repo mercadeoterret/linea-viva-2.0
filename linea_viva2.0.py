@@ -1177,18 +1177,18 @@ def guia_dialog():
     Los estilos inline garantizan que funcionen sin depender del CSS global.
     """
     C = {
-        "bg":       "#F5F0E8",
-        "border":   "#D4CFC4",
-        "muted":    "#6B6456",
-        "faint":    "#B8B0A4",
-        "dark":     "#1A1A14",
-        "green":    "#2D6A4F",
-        "blue":     "#4488FF",
-        "red":      "#FF3B30",
-        "orange":   "#FF9500",
-        "yellow":   "#FFB800",
-        "row_even": "#E8E3D8",
-        "row_odd":  "#EDEAE0",
+        "bg":       "#1E1E1E",
+        "border":   "#444444",
+        "muted":    "#CCCCCC",
+        "faint":    "#999999",
+        "dark":     "#FFFFFF",
+        "green":    "#4ADE80",
+        "blue":     "#60A5FA",
+        "red":      "#FF6B6B",
+        "orange":   "#FFB347",
+        "yellow":   "#FFD166",
+        "row_even": "#2A2A2A",
+        "row_odd":  "#222222",
     }
 
     # ── INTRO ──────────────────────────────────────────────────────────────────
