@@ -737,6 +737,10 @@ def check_google_login():
 # ─── SHOPIFY API HELPERS ──────────────────────────────────────────────────────
 
 def _headers(token):
+    # atkn_ tokens usan Authorization Bearer (nuevo formato Shopify 2025)
+    # shpat_ tokens usan X-Shopify-Access-Token (formato anterior)
+    if token.startswith("atkn_"):
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     return {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
 
