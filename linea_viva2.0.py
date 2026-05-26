@@ -121,7 +121,7 @@ MULTIPLO       = 6     # cantidad mínima de reposición y múltiplo de pedido
 # ─── CONSTANTES SHOPIFY ───────────────────────────────────────────────────────
 LOCATIONS_EXCLUIR = ["Recogida en tienda (NO USAR)"]
 LOCATIONS_VALIDAS = ["TERRET", "Tienda Fisica", "Tienda Móvil - Ferias"]
-API_VERSION       = "2025-01"
+API_VERSION       = "2024-10"
 UMBRAL_BS         = 25   # ventas60d >= este valor → producto "Best Seller" (tag visual)
 
 
@@ -531,7 +531,7 @@ def shopify_get_token():
         with st.spinner("Conectando con Shopify..."):
             resp = requests.post(
                 f"https://{shop}/admin/oauth/access_token",
-                json={"client_id": client_id, "client_secret": client_secret, "code": code},
+                data={"client_id": client_id, "client_secret": client_secret, "code": code},
                 timeout=15,
             )
         if resp.status_code == 200:
