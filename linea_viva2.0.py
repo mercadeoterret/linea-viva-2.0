@@ -3132,9 +3132,8 @@ def main():
             df         = construir_df(productos, stock_map, ventas_map, locations)
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 401:
-                st.error("Token de Shopify inválido. Reconectando...")
-                st.session_state.pop("shopify_token", None)
-                st.rerun()
+                st.error(f"Error 401 — Token inválido o sin permisos. Detalle: {e.response.text[:300]}")
+                st.stop()
             st.error(f"Error de Shopify: {e}")
             st.stop()
         except Exception as e:
