@@ -121,7 +121,7 @@ MULTIPLO       = 6     # cantidad mínima de reposición y múltiplo de pedido
 # ─── CONSTANTES SHOPIFY ───────────────────────────────────────────────────────
 LOCATIONS_EXCLUIR = ["Recogida en tienda (NO USAR)"]
 LOCATIONS_VALIDAS = ["TERRET", "Tienda Fisica", "Tienda Móvil - Ferias"]
-API_VERSION       = "2025-01"
+API_VERSION       = "2024-10"
 UMBRAL_BS         = 25   # ventas60d >= este valor → producto "Best Seller" (tag visual)
 
 
@@ -510,17 +510,63 @@ PLOT_BASE = dict(
 
 # ─── SHOPIFY OAUTH ────────────────────────────────────────────────────────────
 
+def shopify_refresh_token(shop, client_id, client_secret, refresh_token, access_token):
+    """
+    Nuevo flujo Shopify (2025): usa refresh_token para obtener un nuevo access_token
+    cuando el secreto fue rotado. Ver:
+    https://shopify.dev/docs/apps/build/authentication-authorization/client-secrets/rotate-revoke-client-credentials
+    """
+    resp = requests.post(
+        f"https://{shop}/admin/oauth/access_token",
+        json={
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "access_token":  access_token,
+        },
+        timeout=15,
+    )
+    if resp.status_code == 200:
+        return resp.json().get("access_token", "")
+    return ""
+
+
 def shopify_get_token():
-    token = st.secrets.get("SHOPIFY_ACCESS_TOKEN", "")
-    if token:
-        return token
+    # Si hay SHOPIFY_REFRESH_TOKEN en secrets, úsalo para renovar el access token
+    refresh_token = st.secrets.get("SHOPIFY_REFRESH_TOKEN", "")
+    access_token  = st.secrets.get("SHOPIFY_ACCESS_TOKEN", "")
+    shop          = st.secrets.get("TIENDA_URL", "")
+    client_id     = st.secrets.get("SHOPIFY_CLIENT_ID", "")
+    client_secret = st.secrets.get("SHOPIFY_CLIENT_SECRET", "")
+
+    if refresh_token and access_token:
+        if not st.session_state.get("shopify_token"):
+            with st.spinner("Renovando token de Shopify..."):
+                new_tok = shopify_refresh_token(shop, client_id, client_secret, refresh_token, access_token)
+            if new_tok:
+                st.session_state["shopify_token"] = new_tok
+            else:
+                st.error(f"Error renovando token. Verifica SHOPIFY_REFRESH_TOKEN en Secrets.")
+                # Mostrar detalle del error para diagnóstico
+                try:
+                    resp2 = requests.post(
+                        f"https://{shop}/admin/oauth/access_token",
+                        json={"client_id": client_id, "client_secret": client_secret,
+                              "refresh_token": refresh_token, "access_token": access_token},
+                        timeout=15,
+                    )
+                    st.error(f"HTTP {resp2.status_code}: {resp2.text}")
+                except Exception as e:
+                    st.error(f"Excepción: {e}")
+                st.stop()
+        return st.session_state["shopify_token"]
+
+    if access_token:
+        return access_token
 
     if st.session_state.get("shopify_token"):
         return st.session_state["shopify_token"]
 
-    shop          = st.secrets["TIENDA_URL"]
-    client_id     = st.secrets["SHOPIFY_CLIENT_ID"]
-    client_secret = st.secrets["SHOPIFY_CLIENT_SECRET"]
     redirect_uri  = st.secrets["REDIRECT_URI"]
 
     params = st.query_params
@@ -531,7 +577,7 @@ def shopify_get_token():
         with st.spinner("Conectando con Shopify..."):
             resp = requests.post(
                 f"https://{shop}/admin/oauth/access_token",
-                data={"client_id": client_id, "client_secret": client_secret, "code": code},
+                json={"client_id": client_id, "client_secret": client_secret, "code": code},
                 timeout=15,
             )
         if resp.status_code == 200:
