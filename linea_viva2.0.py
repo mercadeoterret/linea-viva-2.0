@@ -1969,6 +1969,124 @@ def vista_dashboard(df, locations, token):
 
 # ─── MÓDULO 1: INVENTARIO POR ACCIÓN ─────────────────────────────────────────
 
+def exportar_inventario(sub, nombre):
+    """
+    Genera botones de descarga CSV, Excel y genera una tabla para PDF
+    a partir de un DataFrame filtrado de inventario.
+    Columnas exportadas: Producto, Tipo, Variante, SKU, Stock,
+    Días Inv., Ventas 60d, Rotación, Acción, Sugerido.
+    """
+    import io
+
+    # ── Preparar DataFrame limpio ──────────────────────────────────────────────
+    def sug(row):
+        s, _ = sugerir_cantidad(row["Stock"], row["Ventas60d"], row["DiasInv_n"], row["_accion"])
+        return s if s > 0 else 0
+
+    export_df = sub.copy()
+    export_df["Días Inv."]  = export_df["DiasInv_n"].apply(lambda x: int(x) if x < 9999 else "∞")
+    export_df["Rotación"]   = export_df["_rotacion"].map(
+        {"ALTA": "Alta Rotación", "MEDIA": "Media Rotación", "BAJA": "Baja Rotación", "NULA": "Sin Ventas"}
+    )
+    export_df["Acción"]     = export_df["_accion"].map(
+        {"REPROGRAMAR": "Reprogramar", "OK": "OK", "MONITOREAR": "Monitorear",
+         "LIQUIDAR": "Liquidar", "HUECO": "Hueco"}
+    )
+    export_df["Sugerido"]   = export_df.apply(sug, axis=1)
+    export_df["Ventas 60d"] = export_df["Ventas60d"].astype(int)
+
+    cols_export = ["Producto", "Tipo", "Variante", "SKU", "Stock",
+                   "Días Inv.", "Ventas 60d", "Rotación", "Acción", "Sugerido"]
+    df_out = export_df[cols_export].sort_values(["Tipo", "Producto", "Variante"])
+
+    fecha_str = datetime.now().strftime("%Y%m%d_%H%M")
+    nombre_archivo = f"LV_{nombre}_{fecha_str}"
+
+    st.markdown(
+        "<div style='font-family:Bebas Neue,sans-serif;font-size:11px;letter-spacing:2px;"
+        "color:#6B6456;margin:20px 0 8px 0;'>EXPORTAR INFORME</div>",
+        unsafe_allow_html=True,
+    )
+
+    col_csv, col_xlsx, col_info = st.columns([1, 1, 4])
+
+    # ── CSV ────────────────────────────────────────────────────────────────────
+    with col_csv:
+        csv_buf = io.StringIO()
+        df_out.to_csv(csv_buf, index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="⬇ CSV",
+            data=csv_buf.getvalue().encode("utf-8-sig"),
+            file_name=f"{nombre_archivo}.csv",
+            mime="text/csv",
+            key=f"dl_csv_{nombre}",
+        )
+
+    # ── XLSX ───────────────────────────────────────────────────────────────────
+    with col_xlsx:
+        xlsx_buf = io.BytesIO()
+        with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as writer:
+            df_out.to_excel(writer, index=False, sheet_name=nombre[:30])
+            ws = writer.sheets[nombre[:30]]
+
+            # Estilos básicos
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+
+            header_fill = PatternFill("solid", fgColor="2D6A4F")
+            header_font = Font(color="F5F0E8", bold=True, name="Calibri", size=10)
+            thin         = Side(style="thin", color="D4CFC4")
+            border       = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+            col_widths = [35, 20, 18, 14, 8, 10, 12, 16, 14, 10]
+            for i, width in enumerate(col_widths, 1):
+                ws.column_dimensions[get_column_letter(i)].width = width
+
+            for cell in ws[1]:
+                cell.fill      = header_fill
+                cell.font      = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border    = border
+
+            # Colores por acción en la columna Acción (col 9)
+            accion_colors = {
+                "Reprogramar": "FFCCCC",
+                "Liquidar":    "FFE5CC",
+                "Monitorear":  "CCE5FF",
+                "OK":          "CCFFCC",
+                "Hueco":       "F0F0F0",
+            }
+            for row_idx, row in enumerate(ws.iter_rows(min_row=2), 2):
+                for cell in row:
+                    cell.border    = border
+                    cell.alignment = Alignment(vertical="center")
+                    cell.font      = Font(name="Calibri", size=9)
+                accion_val = ws.cell(row=row_idx, column=9).value
+                if accion_val in accion_colors:
+                    fill = PatternFill("solid", fgColor=accion_colors[accion_val])
+                    for cell in row:
+                        cell.fill = fill
+
+            ws.freeze_panes = "A2"
+
+        xlsx_buf.seek(0)
+        st.download_button(
+            label="⬇ Excel",
+            data=xlsx_buf.getvalue(),
+            file_name=f"{nombre_archivo}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_xlsx_{nombre}",
+        )
+
+    with col_info:
+        st.markdown(
+            f"<div style='font-size:11px;color:#6B6456;padding-top:6px;'>"
+            f"{len(df_out)} SKUs · {df_out['Producto'].nunique()} productos · "
+            f"generado {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def vista_inventario(df, accion, locations):
     cfg   = ACCION_CFG[accion]
     color = cfg["color"]
@@ -2151,6 +2269,10 @@ def vista_inventario(df, accion, locations):
                             st.success(f"Orden registrada — {prod} · {cant} u · entrega {fecha}")
 
             st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
+
+    # ── Exportar informe de esta categoría ────────────────────────────────────
+    st.markdown("<hr style='border-color:#D4CFC4;margin:24px 0 0 0;'>", unsafe_allow_html=True)
+    exportar_inventario(df[df["_accion"] == accion].copy(), accion)
 
 
 # ─── MÓDULOS 2-5: VENTAS, ROTACIÓN, TENDENCIAS, SKUs ─────────────────────────
@@ -3115,6 +3237,12 @@ def vista_rotacion_segmento(df, rotacion, locations):
                 f"<div style='height:8px;'></div>",
                 unsafe_allow_html=True,
             )
+
+    # ── Exportar informe de esta categoría de rotación ────────────────────────
+    sub_export = df[(df["_rotacion"] == rotacion) & (df["Stock"] > 0)].copy() if rotacion == "NULA" \
+        else df[df["_rotacion"] == rotacion].copy()
+    st.markdown("<hr style='border-color:#D4CFC4;margin:24px 0 0 0;'>", unsafe_allow_html=True)
+    exportar_inventario(sub_export, f"ROT_{rotacion}")
 
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
